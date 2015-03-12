@@ -23,7 +23,6 @@ from oslo_config import cfg
 from neutron.agent.linux import external_process
 from neutron.agent.linux import utils
 from neutron.common import exceptions
-from neutron.i18n import _LW
 from neutron.openstack.common import log as logging
 
 VALID_STATES = ['MASTER', 'BACKUP']
@@ -33,6 +32,7 @@ HA_DEFAULT_PRIORITY = 50
 PRIMARY_VIP_RANGE_SIZE = 24
 # TODO(amuller): Use L3 agent constant when new constants module is introduced.
 FIP_LL_SUBNET = '169.254.30.0/23'
+KEEPALIVED_SERVICE_NAME = 'keepalived'
 
 
 LOG = logging.getLogger(__name__)
@@ -60,21 +60,33 @@ def get_free_range(parent_range, excluded_ranges, size=PRIMARY_VIP_RANGE_SIZE):
 
 
 class InvalidInstanceStateException(exceptions.NeutronException):
-    message = (_('Invalid instance state: %%(state)s, valid states are: '
-                 '%(valid_states)s') %
-               {'valid_states': ', '.join(VALID_STATES)})
+    message = _('Invalid instance state: %(state)s, valid states are: '
+                '%(valid_states)s')
+
+    def __init__(self, **kwargs):
+        if 'valid_states' not in kwargs:
+            kwargs['valid_states'] = ', '.join(VALID_STATES)
+        super(InvalidInstanceStateException, self).__init__(**kwargs)
 
 
 class InvalidNotifyStateException(exceptions.NeutronException):
-    message = (_('Invalid notify state: %%(state)s, valid states are: '
-                 '%(valid_notify_states)s') %
-               {'valid_notify_states': ', '.join(VALID_NOTIFY_STATES)})
+    message = _('Invalid notify state: %(state)s, valid states are: '
+                '%(valid_notify_states)s')
+
+    def __init__(self, **kwargs):
+        if 'valid_notify_states' not in kwargs:
+            kwargs['valid_notify_states'] = ', '.join(VALID_NOTIFY_STATES)
+        super(InvalidNotifyStateException, self).__init__(**kwargs)
 
 
-class InvalidAuthenticationTypeExecption(exceptions.NeutronException):
-    message = (_('Invalid authentication type: %%(auth_type)s, '
-                 'valid types are: %(valid_auth_types)s') %
-               {'valid_auth_types': ', '.join(VALID_AUTH_TYPES)})
+class InvalidAuthenticationTypeException(exceptions.NeutronException):
+    message = _('Invalid authentication type: %(auth_type)s, '
+                'valid types are: %(valid_auth_types)s')
+
+    def __init__(self, **kwargs):
+        if 'valid_auth_types' not in kwargs:
+            kwargs['valid_auth_types'] = ', '.join(VALID_AUTH_TYPES)
+        super(InvalidAuthenticationTypeException, self).__init__(**kwargs)
 
 
 class KeepalivedVipAddress(object):
@@ -140,7 +152,7 @@ class KeepalivedInstance(object):
 
     def set_authentication(self, auth_type, password):
         if auth_type not in VALID_AUTH_TYPES:
-            raise InvalidAuthenticationTypeExecption(auth_type=auth_type)
+            raise InvalidAuthenticationTypeException(auth_type=auth_type)
 
         self.authentication = (auth_type, password)
 
@@ -353,14 +365,13 @@ class KeepalivedManager(KeepalivedNotifierMixin):
     """
 
     def __init__(self, resource_id, config, conf_path='/tmp',
-                 namespace=None):
+                 namespace=None, process_monitor=None):
         self.resource_id = resource_id
         self.config = config
         self.namespace = namespace
+        self.process_monitor = process_monitor
         self.conf_path = conf_path
-        self.conf = cfg.CONF
         self.process = None
-        self.spawned = False
 
     def _output_config_file(self):
         config_str = self.config.get_config_str()
@@ -381,11 +392,6 @@ class KeepalivedManager(KeepalivedNotifierMixin):
     def spawn(self):
         config_path = self._output_config_file()
 
-        self.process = self.get_process(self.conf,
-                                        self.resource_id,
-                                        self.namespace,
-                                        self.conf_path)
-
         def callback(pid_file):
             cmd = ['keepalived', '-P',
                    '-f', config_path,
@@ -393,41 +399,26 @@ class KeepalivedManager(KeepalivedNotifierMixin):
                    '-r', '%s-vrrp' % pid_file]
             return cmd
 
-        self.process.enable(callback, reload_cfg=True)
+        pm = self.get_process(callback=callback)
+        pm.enable(reload_cfg=True)
 
-        self.spawned = True
+        self.process_monitor.register(uuid=self.resource_id,
+                                      service_name=KEEPALIVED_SERVICE_NAME,
+                                      monitored_process=pm)
+
         LOG.debug('Keepalived spawned with config %s', config_path)
 
-    def spawn_or_restart(self):
-        if self.process:
-            self.restart()
-        else:
-            self.spawn()
-
-    def restart(self):
-        if self.process.active:
-            self._output_config_file()
-            self.process.reload_cfg()
-        else:
-            LOG.warn(_LW('A previous instance of keepalived seems to be dead, '
-                         'unable to restart it, a new instance will be '
-                         'spawned'))
-            self.process.disable()
-            self.spawn()
-
     def disable(self):
-        if self.process:
-            self.process.disable(sig='15')
-            self.spawned = False
+        self.process_monitor.unregister(uuid=self.resource_id,
+                                        service_name=KEEPALIVED_SERVICE_NAME)
 
-    def revive(self):
-        if self.spawned and not self.process.active:
-            self.restart()
+        pm = self.get_process()
+        pm.disable(sig='15')
 
-    @classmethod
-    def get_process(cls, conf, resource_id, namespace, conf_path):
+    def get_process(self, callback=None):
         return external_process.ProcessManager(
-            conf,
-            resource_id,
-            namespace,
-            pids_path=conf_path)
+            cfg.CONF,
+            self.resource_id,
+            self.namespace,
+            pids_path=self.conf_path,
+            default_cmd_callback=callback)

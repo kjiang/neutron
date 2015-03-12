@@ -341,6 +341,20 @@ class L3SchedulerTestBaseMixin(object):
                                         router['router']['id'])
             self.assertNotEqual(already_scheduled, auto_s.called)
 
+    def test__unbind_router_removes_binding(self):
+        agent_id = self.agent_id1
+        agent = self.agent1
+        router = self._make_router(self.fmt,
+                                   tenant_id=str(uuid.uuid4()),
+                                   name='r1')
+        self._test_schedule_bind_router(agent, router)
+        self._unbind_router(self.adminContext,
+                            router['router']['id'],
+                            agent_id)
+        bindings = self._get_l3_bindings_hosting_routers(
+            self.adminContext, [router['router']['id']])
+        self.assertEqual(0, len(bindings))
+
     def _create_router_for_l3_agent_dvr_test(self,
                                              distributed=False,
                                              external_gw=None):
@@ -653,41 +667,33 @@ class L3SchedulerTestBaseMixin(object):
 
     def test_check_ports_exist_on_l3agent_no_subnets(self):
         l3_agent, router = self._prepare_check_ports_exist_tests()
-        with mock.patch.object(manager.NeutronManager,
-                               'get_plugin') as getp:
-            getp.return_value = self.plugin
-            # no subnets
-            val = self.check_ports_exist_on_l3agent(self.adminContext,
-                                                    l3_agent, router['id'])
-            self.assertFalse(val)
+        # no subnets
+        val = self.check_ports_exist_on_l3agent(self.adminContext,
+                                                l3_agent, router['id'])
+        self.assertFalse(val)
 
     def test_check_ports_exist_on_l3agent_no_subnet_match(self):
         l3_agent, router = self._prepare_check_ports_exist_tests()
-        with mock.patch.object(manager.NeutronManager,
-                               'get_plugin') as getp:
-            getp.return_value = self.plugin
-            # no matching subnet
-            self.get_subnet_ids_on_router.return_value = [str(uuid.uuid4())]
-            val = self.check_ports_exist_on_l3agent(self.adminContext,
-                                                    l3_agent, router['id'])
-            self.assertFalse(val)
+        # no matching subnet
+        self.plugin.get_subnet_ids_on_router = mock.Mock(
+            return_value=[str(uuid.uuid4())])
+        val = self.check_ports_exist_on_l3agent(self.adminContext,
+                                                l3_agent, router['id'])
+        self.assertFalse(val)
 
     def test_check_ports_exist_on_l3agent_subnet_match(self):
         l3_agent, router = self._prepare_check_ports_exist_tests()
-        with mock.patch.object(manager.NeutronManager,
-                               'get_plugin') as getp:
-            getp.return_value = self.plugin
-            # matching subnet
-            port = {'subnet_id': str(uuid.uuid4()),
-                    'binding:host_id': 'host_1',
-                    'device_owner': 'compute:',
-                    'id': 1234}
-            self.plugin.get_ports.return_value = [port]
-            self.plugin.get_subnet_ids_on_router = mock.Mock(
-                return_value=[port['subnet_id']])
-            val = self.check_ports_exist_on_l3agent(self.adminContext,
-                                                    l3_agent, router['id'])
-            self.assertTrue(val)
+        # matching subnet
+        port = {'subnet_id': str(uuid.uuid4()),
+                'binding:host_id': 'host_1',
+                'device_owner': 'compute:',
+                'id': 1234}
+        self.plugin.get_ports.return_value = [port]
+        self.plugin.get_subnet_ids_on_router = mock.Mock(
+            return_value=[port['subnet_id']])
+        val = self.check_ports_exist_on_l3agent(self.adminContext,
+                                                l3_agent, router['id'])
+        self.assertTrue(val)
 
 
 class L3SchedulerTestCase(l3_agentschedulers_db.L3AgentSchedulerDbMixin,

@@ -16,6 +16,7 @@
 import contextlib
 import functools
 import mock
+import six
 import testtools
 import uuid
 import webob
@@ -27,7 +28,6 @@ from neutron import context
 from neutron.db import db_base_plugin_v2 as base_plugin
 from neutron.db import l3_db
 from neutron.extensions import external_net as external_net
-from neutron.extensions import l3agentscheduler
 from neutron.extensions import multiprovidernet as mpnet
 from neutron.extensions import portbindings
 from neutron.extensions import providernet as pnet
@@ -137,6 +137,38 @@ class TestMl2V2HTTPResponse(test_plugin.TestV2HTTPResponse,
 
 class TestMl2NetworksV2(test_plugin.TestNetworksV2,
                         Ml2PluginV2TestCase):
+    def setUp(self, plugin=None):
+        super(TestMl2NetworksV2, self).setUp()
+        # provider networks
+        self.pnets = [{'name': 'net1',
+                       pnet.NETWORK_TYPE: 'vlan',
+                       pnet.PHYSICAL_NETWORK: 'physnet1',
+                       pnet.SEGMENTATION_ID: 1,
+                       'tenant_id': 'tenant_one'},
+                      {'name': 'net2',
+                       pnet.NETWORK_TYPE: 'vlan',
+                       pnet.PHYSICAL_NETWORK: 'physnet2',
+                       pnet.SEGMENTATION_ID: 210,
+                       'tenant_id': 'tenant_one'},
+                      {'name': 'net3',
+                       pnet.NETWORK_TYPE: 'vlan',
+                       pnet.PHYSICAL_NETWORK: 'physnet2',
+                       pnet.SEGMENTATION_ID: 220,
+                       'tenant_id': 'tenant_one'}
+                      ]
+        # multiprovider networks
+        self.mp_nets = [{'name': 'net4',
+                         mpnet.SEGMENTS:
+                             [{pnet.NETWORK_TYPE: 'vlan',
+                               pnet.PHYSICAL_NETWORK: 'physnet2',
+                               pnet.SEGMENTATION_ID: 1},
+                              {pnet.NETWORK_TYPE: 'vlan',
+                               pnet.PHYSICAL_NETWORK: 'physnet2',
+                               pnet.SEGMENTATION_ID: 202}],
+                         'tenant_id': 'tenant_one'}
+                        ]
+        self.nets = self.mp_nets + self.pnets
+
     def test_port_delete_helper_tolerates_failure(self):
         plugin = manager.NeutronManager.get_plugin()
         with mock.patch.object(plugin, "delete_port",
@@ -148,6 +180,66 @@ class TestMl2NetworksV2(test_plugin.TestNetworksV2,
         with mock.patch.object(plugin, "delete_subnet",
                                side_effect=exc.SubnetNotFound(subnet_id="1")):
             plugin._delete_subnets(None, [mock.MagicMock()])
+
+    def _create_and_verify_networks(self, networks):
+        for net_idx, net in enumerate(networks):
+            # create
+            req = self.new_create_request('networks',
+                                          {'network': net})
+            # verify
+            network = self.deserialize(self.fmt,
+                                       req.get_response(self.api))['network']
+            if mpnet.SEGMENTS not in net:
+                for k, v in six.iteritems(net):
+                    self.assertEqual(net[k], network[k])
+                    self.assertNotIn(mpnet.SEGMENTS, network)
+            else:
+                segments = network[mpnet.SEGMENTS]
+                expected_segments = net[mpnet.SEGMENTS]
+                self.assertEqual(len(expected_segments), len(segments))
+                for expected, actual in zip(expected_segments, segments):
+                    self.assertEqual(expected, actual)
+
+    def _lookup_network_by_segmentation_id(self, seg_id, num_expected_nets):
+        params_str = "%s=%s" % (pnet.SEGMENTATION_ID, seg_id)
+        net_req = self.new_list_request('networks', None,
+                                        params=params_str)
+        networks = self.deserialize(self.fmt, net_req.get_response(self.api))
+        if num_expected_nets:
+            self.assertIsNotNone(networks)
+            self.assertEqual(num_expected_nets, len(networks['networks']))
+        else:
+            self.assertIsNone(networks)
+        return networks
+
+    def test_list_networks_with_segmentation_id(self):
+        self._create_and_verify_networks(self.pnets)
+        # verify we can find the network that we expect
+        lookup_vlan_id = 1
+        expected_net = [n for n in self.pnets
+                        if n[pnet.SEGMENTATION_ID] == lookup_vlan_id].pop()
+        networks = self._lookup_network_by_segmentation_id(lookup_vlan_id, 1)
+        # verify all provider attributes
+        network = networks['networks'][0]
+        for attr in pnet.ATTRIBUTES:
+            self.assertEqual(expected_net[attr], network[attr])
+
+    def test_list_mpnetworks_with_segmentation_id(self):
+        self._create_and_verify_networks(self.nets)
+
+        # get all networks with seg_id=1 (including multisegment networks)
+        lookup_vlan_id = 1
+        networks = self._lookup_network_by_segmentation_id(lookup_vlan_id, 2)
+
+        # get the mpnet
+        networks = [n for n in networks['networks'] if mpnet.SEGMENTS in n]
+        network = networks.pop()
+        # verify attributes of the looked up item
+        segments = network[mpnet.SEGMENTS]
+        expected_segments = self.mp_nets[0][mpnet.SEGMENTS]
+        self.assertEqual(len(expected_segments), len(segments))
+        for expected, actual in zip(expected_segments, segments):
+            self.assertEqual(expected, actual)
 
 
 class TestMl2SubnetsV2(test_plugin.TestSubnetsV2,
@@ -415,10 +507,7 @@ class TestMl2DvrPortsV2(TestMl2PortsV2):
             self.port(device_owner='compute:None'),
             mock.patch.object(self.l3plugin, 'dvr_deletens_if_no_port',
                               return_value=[ns_to_delete]),
-            mock.patch.object(self.l3plugin, 'remove_router_from_l3_agent',
-                side_effect=l3agentscheduler.RouterNotHostedByL3Agent(
-                            router_id=ns_to_delete['router_id'],
-                            agent_id=ns_to_delete['agent_id']))
+            mock.patch.object(self.l3plugin, 'remove_router_from_l3_agent')
         ) as (get_service_plugin, port, dvr_delns_ifno_port,
               remove_router_from_l3_agent):
 
@@ -538,54 +627,6 @@ class TestMl2PortBinding(Ml2PluginV2TestCase,
             self.assertTrue(glpab_mock.mock_calls)
             # should have returned before calling _make_port_dict
             self.assertFalse(mpd_mock.mock_calls)
-
-    def test_bind_port_if_needed(self):
-        # create a port and set its vif_type to binding_failed
-        with self.port() as port:
-            plugin = manager.NeutronManager.get_plugin()
-            binding = ml2_db.get_locked_port_and_binding(self.context.session,
-                                                         port['port']['id'])[1]
-            binding['host'] = 'test'
-
-            binding['vif_type'] = portbindings.VIF_TYPE_BINDING_FAILED
-            mech_context = driver_context.PortContext(
-                plugin, self.context, port['port'],
-                plugin.get_network(self.context, port['port']['network_id']),
-                binding, None)
-
-        # test when _commit_port_binding return binding_failed
-        self._test_bind_port_if_needed(plugin, mech_context, False)
-        # test when _commit_port_binding NOT return binding_failed
-        self._test_bind_port_if_needed(plugin, mech_context, True)
-
-    def _test_bind_port_if_needed(self, plugin, mech_context, commit_fail):
-        # mock _commit_port_binding
-        commit_context = mock.MagicMock()
-        if commit_fail:
-            commit_context._binding.vif_type = (
-                    portbindings.VIF_TYPE_BINDING_FAILED)
-        else:
-            commit_context._binding.vif_type = portbindings.VIF_TYPE_OVS
-
-        with contextlib.nested(
-            mock.patch('neutron.plugins.ml2.plugin.'
-                       'db.get_locked_port_and_binding',
-                       return_value=(None, None)),
-            mock.patch('neutron.plugins.ml2.plugin.Ml2Plugin._bind_port'),
-            mock.patch('neutron.plugins.ml2.plugin.'
-                       'Ml2Plugin._commit_port_binding',
-                       return_value=(commit_context, False))
-        ) as (glpab_mock, bd_mock, commit_mock):
-            bound_context = plugin._bind_port_if_needed(mech_context)
-            # check _bind_port be called
-            self.assertTrue(bd_mock.called)
-
-            if commit_fail:
-                self.assertEqual(portbindings.VIF_TYPE_BINDING_FAILED,
-                        bound_context._binding.vif_type)
-            else:
-                self.assertEqual(portbindings.VIF_TYPE_OVS,
-                        bound_context._binding.vif_type)
 
     def test_port_binding_profile_not_changed(self):
         profile = {'e': 5}

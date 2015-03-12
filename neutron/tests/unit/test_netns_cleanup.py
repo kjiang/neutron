@@ -15,21 +15,11 @@
 
 import mock
 
-from neutron.agent.linux import interface
 from neutron.cmd import netns_cleanup as util
 from neutron.tests import base
 
 
 class TestNetnsCleanup(base.BaseTestCase):
-
-    def setup_config(self):
-        # don't use default config
-        pass
-
-    def test_setup_conf(self):
-        expected_opts = interface.OPTS
-        conf = util.setup_conf()
-        self.assertTrue(all([opt.name in conf for opt in expected_opts]))
 
     def test_kill_dhcp(self, dhcp_active=True):
         conf = mock.Mock()
@@ -45,8 +35,7 @@ class TestNetnsCleanup(base.BaseTestCase):
             util.kill_dhcp(conf, 'ns')
 
             expected_params = {'conf': conf, 'network': mock.ANY,
-                               'plugin': mock.ANY,
-                               'process_monitor': mock.ANY}
+                               'plugin': mock.ANY}
             import_object.assert_called_once_with('driver', **expected_params)
 
             if dhcp_active:

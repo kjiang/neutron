@@ -26,6 +26,7 @@ from neutron import context
 from neutron.db import agents_db
 from neutron.db import agentschedulers_db as sched_db
 from neutron.db import models_v2
+from neutron.extensions import dhcpagentscheduler
 from neutron.scheduler import dhcp_agent_scheduler
 from neutron.tests.unit import testlib_api
 
@@ -211,16 +212,19 @@ class TestNetworksFailover(TestDhcpSchedulerBaseTestCase,
             notifier = mock.MagicMock()
             self.agent_notifiers[constants.AGENT_TYPE_DHCP] = notifier
             self.remove_networks_from_down_agents()
-            rn.assert_called_with(mock.ANY, agents[0].id, self.network_id)
+            rn.assert_called_with(mock.ANY, agents[0].id, self.network_id,
+                                  notify=False)
             sch.assert_called_with(mock.ANY, {'id': self.network_id})
             notifier.network_added_to_agent.assert_called_with(
                 mock.ANY, self.network_id, agents[1].host)
 
-    def test_reschedule_network_from_down_agent_failed(self):
+    def _test_failed_rescheduling(self, rn_side_effect=None):
         agents = self._create_and_set_agents_down(['host-a'], 1)
         self._test_schedule_bind_network([agents[0]], self.network_id)
         with contextlib.nested(
-            mock.patch.object(self, 'remove_network_from_dhcp_agent'),
+            mock.patch.object(
+                self, 'remove_network_from_dhcp_agent',
+                side_effect=rn_side_effect),
             mock.patch.object(self, 'schedule_network',
                               return_value=None),
             mock.patch.object(self, 'get_network', create=True,
@@ -229,9 +233,18 @@ class TestNetworksFailover(TestDhcpSchedulerBaseTestCase,
             notifier = mock.MagicMock()
             self.agent_notifiers[constants.AGENT_TYPE_DHCP] = notifier
             self.remove_networks_from_down_agents()
-            rn.assert_called_with(mock.ANY, agents[0].id, self.network_id)
+            rn.assert_called_with(mock.ANY, agents[0].id, self.network_id,
+                                  notify=False)
             sch.assert_called_with(mock.ANY, {'id': self.network_id})
             self.assertFalse(notifier.network_added_to_agent.called)
+
+    def test_reschedule_network_from_down_agent_failed(self):
+        self._test_failed_rescheduling()
+
+    def test_reschedule_network_from_down_agent_concurrent_removal(self):
+        self._test_failed_rescheduling(
+            rn_side_effect=dhcpagentscheduler.NetworkNotHostedByDhcpAgent(
+                network_id='foo', agent_id='bar'))
 
     def test_filter_bindings(self):
         bindings = [

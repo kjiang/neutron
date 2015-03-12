@@ -28,9 +28,13 @@ class BasicRouterTestCaseFramework(base.BaseTestCase):
     def _create_router(self, router=None, **kwargs):
         if not router:
             router = mock.MagicMock()
-        return router_info.RouterInfo(mock.sentinel.router_id,
+        self.agent_conf = mock.Mock()
+        # NOTE The use_namespaces config will soon be deprecated
+        self.agent_conf.use_namespaces = True
+        self.router_id = _uuid()
+        return router_info.RouterInfo(self.router_id,
                                       router,
-                                      mock.sentinel.agent_conf,
+                                      self.agent_conf,
                                       mock.sentinel.interface_driver,
                                       **kwargs)
 
@@ -91,7 +95,7 @@ class TestBasicRouterOperations(BasicRouterTestCaseFramework):
         result = ri._add_fip_addr_to_device(
             {'id': mock.sentinel.id, 'floating_ip_address': ip}, device)
 
-        device.addr.add.assert_called_with(4, ip + '/32', ip)
+        device.addr.add.assert_called_with(ip + '/32')
         return result
 
     def test__add_fip_addr_to_device(self):

@@ -358,7 +358,8 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
         IPs. Include the subnet_id in the result if only an IP address is
         configured.
 
-        :raises: InvalidInput, IpAddressInUse
+        :raises: InvalidInput, IpAddressInUse, InvalidIpForNetwork,
+                 InvalidIpForSubnet
         """
         fixed_ip_set = []
         for fixed in fixed_ips:
@@ -377,9 +378,8 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
                         subnet_id = subnet['id']
                         break
                 if not found:
-                    msg = _('IP address %s is not a valid IP for the defined '
-                            'networks subnets') % fixed['ip_address']
-                    raise n_exc.InvalidInput(error_message=msg)
+                    raise n_exc.InvalidIpForNetwork(
+                        ip_address=fixed['ip_address'])
             else:
                 subnet = self._get_subnet(context, fixed['subnet_id'])
                 if subnet['network_id'] != network_id:
@@ -403,9 +403,8 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
                 if (not found and
                     not self._check_subnet_ip(subnet['cidr'],
                                               fixed['ip_address'])):
-                    msg = _('IP address %s is not a valid IP for the defined '
-                            'subnet') % fixed['ip_address']
-                    raise n_exc.InvalidInput(error_message=msg)
+                    raise n_exc.InvalidIpForSubnet(
+                        ip_address=fixed['ip_address'])
                 if (ipv6_utils.is_auto_address_subnet(subnet) and
                     device_owner not in
                         constants.ROUTER_INTERFACE_OWNERS):
@@ -1222,6 +1221,20 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
             models_v2.IPAllocation).filter_by(
                 subnet_id=subnet_id).join(models_v2.Port).first()
 
+    def _subnet_check_ip_allocations_internal_router_ports(self, context,
+                                                           subnet_id):
+        # Do not delete the subnet if IP allocations for internal
+        # router ports still exist
+        allocs = context.session.query(models_v2.IPAllocation).filter_by(
+                subnet_id=subnet_id).join(models_v2.Port).filter(
+                        models_v2.Port.device_owner.in_(
+                            constants.ROUTER_INTERFACE_OWNERS)
+                ).first()
+        if allocs:
+            LOG.debug("Subnet %s still has internal router ports, "
+                      "cannot delete", subnet_id)
+            raise n_exc.SubnetInUse(subnet_id=id)
+
     def delete_subnet(self, context, id):
         with context.session.begin(subtransactions=True):
             subnet = self._get_subnet(context, id)
@@ -1234,7 +1247,10 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
             # for IPv6 addresses which were automatically generated
             # via SLAAC
             is_auto_addr_subnet = ipv6_utils.is_auto_address_subnet(subnet)
-            if not is_auto_addr_subnet:
+            if is_auto_addr_subnet:
+                self._subnet_check_ip_allocations_internal_router_ports(
+                        context, id)
+            else:
                 qry_network_ports = (
                     qry_network_ports.filter(models_v2.Port.device_owner.
                     in_(AUTO_DELETE_PORT_OWNERS)))
@@ -1248,9 +1264,12 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
             # the isolation level is set to READ COMMITTED allocations made
             # concurrently will be returned by this query
             if not is_auto_addr_subnet:
-                if self._subnet_check_ip_allocations(context, id):
-                    LOG.debug("Found IP allocations on subnet %s, "
-                              "cannot delete", id)
+                alloc = self._subnet_check_ip_allocations(context, id)
+                if alloc:
+                    LOG.info(_LI("Found IP allocation %(alloc)s on subnet "
+                                 "%(subnet)s, cannot delete"),
+                             {'alloc': alloc,
+                              'subnet': id})
                     raise n_exc.SubnetInUse(subnet_id=id)
 
             context.session.delete(subnet)

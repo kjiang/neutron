@@ -54,7 +54,9 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
 
     router_device_owners = (
         l3_db.L3_NAT_db_mixin.router_device_owners +
-        (DEVICE_OWNER_DVR_INTERFACE,))
+        (DEVICE_OWNER_DVR_INTERFACE,
+         DEVICE_OWNER_DVR_SNAT,
+         DEVICE_OWNER_AGENT_GW))
 
     extra_attributes = (
         l3_attrs_db.ExtraAttributesMixin.extra_attributes + [{
@@ -199,26 +201,40 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
         floatingIP disassociation happens.
         """
         fip_port = fip.get('port_id')
-        if fip_port and floatingip_db['id']:
-            vm_hostid = self.get_vm_port_hostid(
-                context, fip_port)
-            if vm_hostid:
-                # FIXME (Swami): This FIP Agent Gateway port should be
-                # created only once and there should not be a duplicate
-                # for the same host. Until we find a good solution for
-                # augmenting multiple server requests we should use the
-                # existing flow.
-                fip_agent_port = self.create_fip_agent_gw_port_if_not_exists(
-                    context.elevated(), external_port['network_id'], vm_hostid)
-                LOG.debug("FIP Agent gateway port: %s", fip_agent_port)
         unused_fip_agent_gw_port = (
             fip_port is None and floatingip_db['fixed_port_id'])
-        if unused_fip_agent_gw_port:
+        if unused_fip_agent_gw_port and floatingip_db.get('router_id'):
             admin_ctx = context.elevated()
-            self.clear_unused_fip_agent_gw_port(
-                admin_ctx, floatingip_db)
+            router_dict = self.get_router(
+                admin_ctx, floatingip_db['router_id'])
+            # Check if distributed router and then delete the
+            # FloatingIP agent gateway port
+            if router_dict.get('distributed'):
+                self.clear_unused_fip_agent_gw_port(
+                    admin_ctx, floatingip_db)
         super(L3_NAT_with_dvr_db_mixin, self)._update_fip_assoc(
             context, fip, floatingip_db, external_port)
+        associate_fip = fip_port and floatingip_db['id']
+        if associate_fip and floatingip_db.get('router_id'):
+            admin_ctx = context.elevated()
+            router_dict = self.get_router(
+                admin_ctx, floatingip_db['router_id'])
+            # Check if distributed router and then create the
+            # FloatingIP agent gateway port
+            if router_dict.get('distributed'):
+                vm_hostid = self.get_vm_port_hostid(
+                    context, fip_port)
+                if vm_hostid:
+                    # FIXME (Swami): This FIP Agent Gateway port should be
+                    # created only once and there should not be a duplicate
+                    # for the same host. Until we find a good solution for
+                    # augmenting multiple server requests we should use the
+                    # existing flow.
+                    fip_agent_port = (
+                        self.create_fip_agent_gw_port_if_not_exists(
+                            admin_ctx, external_port['network_id'],
+                            vm_hostid))
+                    LOG.debug("FIP Agent gateway port: %s", fip_agent_port)
 
     def clear_unused_fip_agent_gw_port(
             self, context, floatingip_db):
@@ -349,6 +365,8 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
 
     def _build_routers_list(self, context, routers, gw_ports):
         # Perform a single query up front for all routers
+        if not routers:
+            return []
         router_ids = [r['id'] for r in routers]
         snat_binding = l3_dvrsched_db.CentralizedSnatL3AgentBinding
         query = (context.session.query(snat_binding).

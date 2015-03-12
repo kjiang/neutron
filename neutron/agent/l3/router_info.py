@@ -12,8 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import netaddr
-
+from neutron.agent.l3 import namespaces
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import iptables_manager
 from neutron.common import constants as l3_constants
@@ -23,6 +22,7 @@ from neutron.i18n import _LW
 from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
+INTERNAL_DEV_PREFIX = 'qr-'
 
 
 class RouterInfo(object):
@@ -32,8 +32,7 @@ class RouterInfo(object):
                  router,
                  agent_conf,
                  interface_driver,
-                 use_ipv6=False,
-                 ns_name=None):
+                 use_ipv6=False):
         self.router_id = router_id
         self.ex_gw_port = None
         self._snat_enabled = None
@@ -42,7 +41,14 @@ class RouterInfo(object):
         self.floating_ips = set()
         # Invoke the setter for establishing initial SNAT action
         self.router = router
-        self.ns_name = ns_name
+        self.use_ipv6 = use_ipv6
+        self.ns_name = None
+        self.router_namespace = None
+        if agent_conf.use_namespaces:
+            ns = namespaces.RouterNamespace(
+                router_id, agent_conf, interface_driver, use_ipv6)
+            self.router_namespace = ns
+            self.ns_name = ns.name
         self.iptables_manager = iptables_manager.IptablesManager(
             use_ipv6=use_ipv6,
             namespace=self.ns_name)
@@ -75,6 +81,9 @@ class RouterInfo(object):
     def is_ha(self):
         # TODO(Carl) Refactoring should render this obsolete.  Remove it.
         return False
+
+    def get_internal_device_name(self, port_id):
+        return (INTERNAL_DEV_PREFIX + port_id)[:self.driver.DEV_NAME_LEN]
 
     def perform_snat_action(self, snat_callback, *args):
         # Process SNAT rules for attached subnets
@@ -156,8 +165,7 @@ class RouterInfo(object):
         """
         try:
             ip_cidr = common_utils.ip_to_cidr(fip['floating_ip_address'])
-            net = netaddr.IPNetwork(ip_cidr)
-            device.addr.add(net.version, ip_cidr, str(net.broadcast))
+            device.addr.add(ip_cidr)
             return True
         except RuntimeError:
             # any exception occurred here should cause the floating IP
@@ -169,8 +177,7 @@ class RouterInfo(object):
         raise NotImplementedError()
 
     def remove_floating_ip(self, device, ip_cidr):
-        net = netaddr.IPNetwork(ip_cidr)
-        device.addr.delete(net.version, ip_cidr)
+        device.addr.delete(ip_cidr)
         self.driver.delete_conntrack_state(namespace=self.ns_name, ip=ip_cidr)
 
     def get_router_cidrs(self, device):
@@ -203,6 +210,9 @@ class RouterInfo(object):
             if ip_cidr not in existing_cidrs:
                 fip_statuses[fip['id']] = self.add_floating_ip(
                     fip, interface_name, device)
+                LOG.debug('Floating ip %(id)s added, status %(status)s',
+                          {'id': fip['id'],
+                           'status': fip_statuses.get(fip['id'])})
 
         fips_to_remove = (
             ip_cidr for ip_cidr in existing_cidrs - new_cidrs
@@ -225,3 +235,12 @@ class RouterInfo(object):
         for fip in self.router.get(l3_constants.FLOATINGIP_KEY, []):
             fip_statuses[fip['id']] = l3_constants.FLOATINGIP_STATUS_ERROR
         return fip_statuses
+
+    def create(self):
+        if self.router_namespace:
+            self.router_namespace.create()
+
+    def delete(self):
+        self.radvd.disable()
+        if self.router_namespace:
+            self.router_namespace.delete()

@@ -17,23 +17,29 @@ from oslo_config import cfg
 
 from neutron.agent.linux import external_process
 from neutron.agent.linux import keepalived
-from neutron.tests.functional import base as functional_base
+from neutron.agent.linux import utils
+from neutron.tests import base
 from neutron.tests.unit.agent.linux import test_keepalived
 
 
-class KeepalivedManagerTestCase(functional_base.BaseSudoTestCase,
+class KeepalivedManagerTestCase(base.BaseTestCase,
                                 test_keepalived.KeepalivedConfBaseMixin):
+
     def setUp(self):
         super(KeepalivedManagerTestCase, self).setUp()
-        self.check_sudo_enabled()
+        cfg.CONF.set_override('check_child_processes_interval', 1, 'AGENT')
+
+        self.expected_config = self._get_config()
+        self.process_monitor = external_process.ProcessMonitor(cfg.CONF,
+                                                               'router')
+        self.manager = keepalived.KeepalivedManager(
+            'router1', self.expected_config, conf_path=cfg.CONF.state_path,
+            process_monitor=self.process_monitor)
+        self.addCleanup(self.manager.get_process().disable)
+        self.addCleanup(self.process_monitor.stop)
 
     def test_keepalived_spawn(self):
-        expected_config = self._get_config()
-        manager = keepalived.KeepalivedManager('router1', expected_config,
-                                               conf_path=cfg.CONF.state_path)
-        self.addCleanup(manager.disable)
-
-        manager.spawn()
+        self.manager.spawn()
         process = external_process.ProcessManager(
             cfg.CONF,
             'router1',
@@ -41,5 +47,18 @@ class KeepalivedManagerTestCase(functional_base.BaseSudoTestCase,
             pids_path=cfg.CONF.state_path)
         self.assertTrue(process.active)
 
-        self.assertEqual(expected_config.get_config_str(),
-                         manager.get_conf_on_disk())
+        self.assertEqual(self.expected_config.get_config_str(),
+                         self.manager.get_conf_on_disk())
+
+    def test_keepalived_respawns(self):
+        self.manager.spawn()
+        process = self.manager.get_process()
+        self.assertTrue(process.active)
+
+        process.disable(sig='15')
+
+        utils.wait_until_true(
+            lambda: process.active,
+            timeout=5,
+            sleep=0.01,
+            exception=RuntimeError(_("Keepalived didn't respawn")))

@@ -20,6 +20,7 @@ from neutron.agent.l3 import router_info as router
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import keepalived
 from neutron.agent.metadata import driver as metadata_driver
+from neutron.common import constants as n_consts
 from neutron.common import utils as common_utils
 from neutron.openstack.common import log as logging
 
@@ -67,16 +68,13 @@ class HaRouter(router.RouterInfo):
             LOG.debug('Error while reading HA state for %s', self.router_id)
             return None
 
-    def get_keepalived_manager(self):
-        return keepalived.KeepalivedManager(
+    def _init_keepalived_manager(self, process_monitor):
+        self.keepalived_manager = keepalived.KeepalivedManager(
             self.router['id'],
             keepalived.KeepalivedConf(),
             conf_path=self.agent_conf.ha_confs_path,
-            namespace=self.ns_name)
-
-    def _init_keepalived_manager(self):
-        # TODO(Carl) This looks a bit funny, doesn't it?
-        self.keepalived_manager = self.get_keepalived_manager()
+            namespace=self.ns_name,
+            process_monitor=process_monitor)
 
         config = self.keepalived_manager.config
 
@@ -101,7 +99,7 @@ class HaRouter(router.RouterInfo):
         config.add_instance(instance)
 
     def spawn_keepalived(self):
-        self.keepalived_manager.spawn_or_restart()
+        self.keepalived_manager.spawn()
 
     def disable_keepalived(self):
         self.keepalived_manager.disable()
@@ -111,7 +109,8 @@ class HaRouter(router.RouterInfo):
     def _add_keepalived_notifiers(self):
         callback = (
             metadata_driver.MetadataDriver._get_metadata_proxy_callback(
-                self.router_id, self.agent_conf))
+                self.agent_conf.metadata_port, self.agent_conf,
+                router_id=self.router_id))
         # TODO(mangelajo): use the process monitor in keepalived when
         #                  keepalived stops killing/starting metadata
         #                  proxy on its own
@@ -177,7 +176,7 @@ class HaRouter(router.RouterInfo):
         instance = self._get_keepalived_instance()
 
         # Filter out all of the old routes while keeping only the default route
-        default_gw = ('::/0', '0.0.0.0/0')
+        default_gw = (n_consts.IPv6_ANY, n_consts.IPv4_ANY)
         instance.virtual_routes = [route for route in instance.virtual_routes
                                    if route.destination in default_gw]
         for route in new_routes:
@@ -191,8 +190,9 @@ class HaRouter(router.RouterInfo):
         gw_ip = ex_gw_port['subnet']['gateway_ip']
         if gw_ip:
             # TODO(Carl) This is repeated everywhere.  A method would be nice.
-            default_gw = ('0.0.0.0/0' if netaddr.IPAddress(gw_ip).version == 4
-                          else '::/0')
+            default_gw = (n_consts.IPv4_ANY if
+                          netaddr.IPAddress(gw_ip).version == 4 else
+                          n_consts.IPv6_ANY)
             instance = self._get_keepalived_instance()
             instance.virtual_routes = (
                 [route for route in instance.virtual_routes
@@ -210,13 +210,8 @@ class HaRouter(router.RouterInfo):
         it manage IPv4 addresses. In order to do that, we must delete
         the address first as it is autoconfigured by the kernel.
         """
-        process = keepalived.KeepalivedManager.get_process(
-            self.agent_conf,
-            self.router_id,
-            self.ns_name,
-            self.agent_conf.ha_confs_path)
-        if process.active:
-            manager = self.get_keepalived_manager()
+        manager = self.keepalived_manager
+        if manager.get_process().active:
             conf = manager.get_conf_on_disk()
             managed_by_keepalived = conf and ipv6_lladdr in conf
             if managed_by_keepalived:
@@ -232,7 +227,7 @@ class HaRouter(router.RouterInfo):
         ipv6_lladdr = self._get_ipv6_lladdr(device.link.address)
 
         if self._should_delete_ipv6_lladdr(ipv6_lladdr):
-            device.addr.flush()
+            device.addr.flush(n_consts.IP_VERSION_6)
 
         self._remove_vip(ipv6_lladdr)
         self._add_vip(ipv6_lladdr, interface_name, scope='link')

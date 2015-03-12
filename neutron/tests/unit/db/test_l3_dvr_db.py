@@ -155,6 +155,32 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             'device_id': ['agent_id'],
             'device_owner': [l3_const.DEVICE_OWNER_AGENT_GW]})
 
+    def _test_prepare_direct_delete_dvr_internal_ports(self, port):
+        with mock.patch.object(manager.NeutronManager, 'get_plugin') as gp:
+            plugin = mock.Mock()
+            gp.return_value = plugin
+            plugin._get_port.return_value = port
+            self.assertRaises(l3.L3PortInUse,
+                              self.mixin.prevent_l3_port_deletion,
+                              self.ctx,
+                              port['id'])
+
+    def test_prevent_delete_floatingip_agent_gateway_port(self):
+        port = {
+            'id': 'my_port_id',
+            'fixed_ips': mock.ANY,
+            'device_owner': l3_const.DEVICE_OWNER_AGENT_GW
+        }
+        self._test_prepare_direct_delete_dvr_internal_ports(port)
+
+    def test_prevent_delete_csnat_port(self):
+        port = {
+            'id': 'my_port_id',
+            'fixed_ips': mock.ANY,
+            'device_owner': l3_const.DEVICE_OWNER_ROUTER_SNAT
+        }
+        self._test_prepare_direct_delete_dvr_internal_ports(port)
+
     def test__create_gw_port_with_no_gateway(self):
         router = {
             'name': 'foo_router',
@@ -342,32 +368,33 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         floatingip = {
             'id': _uuid(),
             'fixed_port_id': 1234,
+            'router_id': 'foo_router_id'
         }
+        router = {'id': 'foo_router_id', 'distributed': True}
         with contextlib.nested(
+            mock.patch.object(self.mixin,
+                              'get_router'),
             mock.patch.object(self.mixin,
                               'clear_unused_fip_agent_gw_port'),
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_update_fip_assoc'),
-                 ) as (vf, cf):
+                 ) as (grtr, vf, cf):
+            grtr.return_value = router
             self.mixin._update_fip_assoc(
                 self.ctx, fip, floatingip, mock.ANY)
             self.assertTrue(vf.called)
 
-    def test_create_floatingip_agent_gw_port(self):
-        fip = {
-            'id': _uuid(),
-            'port_id': _uuid(),
-        }
-        floatingip = {
-            'id': _uuid(),
-            'fixed_port_id': 1234,
-        }
+    def _setup_test_create_delete_floatingip(
+        self, fip, floatingip_db, router_db):
         port = {
-            'id': _uuid(),
+            'id': '1234',
             'binding:host_id': 'myhost',
             'network_id': 'external_net'
         }
+
         with contextlib.nested(
+            mock.patch.object(self.mixin,
+                              'get_router'),
             mock.patch.object(self.mixin,
                               'get_vm_port_hostid'),
             mock.patch.object(self.mixin,
@@ -376,11 +403,78 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
                               'create_fip_agent_gw_port_if_not_exists'),
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_update_fip_assoc'),
-                 ) as (vmp, vf, c_fip, cf):
+                 ) as (grtr, vmp, d_fip, c_fip, up_fip):
+            grtr.return_value = router_db
             vmp.return_value = 'my-host'
             self.mixin._update_fip_assoc(
-                self.ctx, fip, floatingip, port)
-            self.assertTrue(c_fip.called)
+                self.ctx, fip, floatingip_db, port)
+            return d_fip, c_fip
+
+    def test_create_floatingip_agent_gw_port_with_dvr_router(self):
+        floatingip = {
+            'id': _uuid(),
+            'router_id': 'foo_router_id'
+        }
+        router = {'id': 'foo_router_id', 'distributed': True}
+        fip = {
+            'id': _uuid(),
+            'port_id': _uuid()
+        }
+        delete_fip, create_fip = (
+            self._setup_test_create_delete_floatingip(
+                fip, floatingip, router))
+        self.assertTrue(create_fip.called)
+        self.assertFalse(delete_fip.called)
+
+    def test_create_floatingip_agent_gw_port_with_non_dvr_router(self):
+        floatingip = {
+            'id': _uuid(),
+            'router_id': 'foo_router_id'
+        }
+        router = {'id': 'foo_router_id', 'distributed': False}
+        fip = {
+            'id': _uuid(),
+            'port_id': _uuid()
+        }
+        delete_fip, create_fip = (
+            self._setup_test_create_delete_floatingip(
+                fip, floatingip, router))
+        self.assertFalse(create_fip.called)
+        self.assertFalse(delete_fip.called)
+
+    def test_delete_floatingip_agent_gw_port_with_dvr_router(self):
+        floatingip = {
+            'id': _uuid(),
+            'fixed_port_id': 1234,
+            'router_id': 'foo_router_id'
+        }
+        router = {'id': 'foo_router_id', 'distributed': True}
+        fip = {
+            'id': _uuid(),
+            'port_id': None
+        }
+        delete_fip, create_fip = (
+            self._setup_test_create_delete_floatingip(
+                fip, floatingip, router))
+        self.assertTrue(delete_fip.called)
+        self.assertFalse(create_fip.called)
+
+    def test_delete_floatingip_agent_gw_port_with_non_dvr_router(self):
+        floatingip = {
+            'id': _uuid(),
+            'fixed_port_id': 1234,
+            'router_id': 'foo_router_id'
+        }
+        router = {'id': 'foo_router_id', 'distributed': False}
+        fip = {
+            'id': _uuid(),
+            'port_id': None
+        }
+        delete_fip, create_fip = (
+            self._setup_test_create_delete_floatingip(
+                fip, floatingip, router))
+        self.assertFalse(create_fip.called)
+        self.assertFalse(delete_fip.called)
 
     def test__validate_router_migration_prevent_check_advanced_svc(self):
         router = {'name': 'foo_router', 'admin_state_up': True}

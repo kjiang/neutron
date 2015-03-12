@@ -364,15 +364,171 @@ be the bare minimum you have to complete in order to get you off the ground.
   `3rd Party CI <http://ci.openstack.org/third_party.html>`_ to get one.
 * TODO(armax): ...
 
-The 'ODL ML2 Mechanism Driver' - example 1
-------------------------------------------
 
-* Create the StackForge repo: https://review.openstack.org/#/c/136854/
-* TODO(armax): continue with adding meat on the bone here
+Decomposition progress chart
+============================
 
-The 'OVSvAPP Mechanism Driver' - example 2
-------------------------------------------
+The following chart captures the following aspects:
 
-* Create the StackForge repo: https://review.openstack.org/#/c/136091/
-* Cookiecutter initial commit: https://review.openstack.org/#/c/141268/
-* TODO(armax): continue with adding meat on the bone here
+* Name: the name of the project that implements a Neutron plugin or driver. The
+  name is an internal target for links that point to source code, etc.
+* Plugins/Drivers: whether the source code contains a core (aka monolithic)
+  plugin, a set of ML2 drivers, and/or (service) plugins (or extensions) for
+  firewall, vpn, and load balancers.
+* Launchpad: whether the project is managed through Launchpad.
+* PyPI: whether the project deliverables are available through PyPI.
+* State: a code to represent the current state of the decomposition. Possible
+  values are:
+
+  * [A] External repo available, no code decomposition
+  * [B] External repo available, partial code decomposition
+  * [C] External repo available, code decomposition is complete
+  * [D] Not deemed required. Driver is already bare-bone and decomposition
+        effort is not considered justified. Assessment may change in the
+        future
+
+  Absense of an entry for an existing plugin or driver means no active effort
+  has been observed or potentially not required.
+* Completed in: the release in which the effort is considered completed. Code
+  completion can be deemed as such, if there is no overlap/duplication between
+  what exists in the Neutron tree, and what it exists in the vendor repo.
+
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| Name                          |    Plugins/Drivers    | Launchpad |       PyPI       |  State  | Completed in |
++===============================+=======================+===========+==================+=========+==============+
+| freescale-nscs_               |         ml2,fw        |    no     |       no         |   [D]   |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-arista_            |       ml2,l3          |    yes    |       yes        |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-brocade_           |                       |           |                  |         |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-cisco_             |  core,ml2,l3,fw,vpn   |    yes    |       yes        |   [B]   |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-hyperv_            |                       |           |                  |         |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-metaplugin_        |         core          |    no     |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-midonet_           |        core,lb        |    yes    |       yes        |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-mlnx_              |          ml2          |    yes    |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-nec_               |         core          |    yes    |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| nuage-openstack-neutron_      |                       |           |                  |         |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-odl_               |      ml2,l3,lb,fw     |    yes    |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-ofagent_           |          ml2          |    yes    |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-ovs-dpdk_          |          ml2          |    yes    |       no         |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-plumgrid_          |          core         |    yes    |       yes        |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| networking-vsphere_           |                       |           |                  |         |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| pluribus_                     |                       |           |                  |         |              |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+| vmware-nsx_                   |         core          |    yes    |       yes        |   [C]   |     Kilo     |
++-------------------------------+-----------------------+-----------+------------------+---------+--------------+
+
+.. _networking-arista:
+
+Arista
+------
+
+* Git: https://github.com/stackforge/networking-arista
+* Launchpad: https://launchpad.net/networking-arista
+* Pypi: https://pypi.python.org/pypi/networking-arista
+
+.. _networking-brocade:
+
+.. _networking-cisco:
+
+Cisco
+-----
+
+* Git: https://git.openstack.org/stackforge/networking-cisco
+* Launchpad: https://launchpad.net/networking-cisco
+* PyPI: https://pypi.python.org/pypi/networking-cisco
+
+.. _networking-hyperv:
+
+.. _networking-metaplugin:
+
+Metaplugin
+----------
+
+* Git: https://github.com/ntt-sic/networking-metaplugin
+
+.. _networking-midonet:
+
+MidoNet
+-------
+
+* Git: https://github.com/stackforge/networking-midonet
+* Launchpad: https://launchpad.net/networking-midonet
+* PyPI: https://pypi.python.org/pypi/networking-midonet
+
+.. _networking-mlnx:
+
+Mellanox
+--------
+
+* Git: https://github.com/stackforge/networking-mlnx
+* Launchpad: https://launchpad.net/networking-mlnx
+
+.. _networking-nec:
+
+NEC
+---
+
+* Git: https://github.com/stackforge/networking-nec
+* Launchpad: https://launchpad.net/networking-nec
+
+.. _nuage-openstack-neutron:
+
+.. _networking-odl:
+
+OpenDayLight
+------------
+
+* Git: https://github.com/stackforge/networking-odl
+* Launchpad: https://launchpad.net/networking-odl
+
+.. _networking-ofagent:
+
+OpenFlow Agent (ofagent)
+------------------------
+
+* Git: https://github.com/stackforge/networking-ofagent
+* Launchpad: https://launchpad.net/networking-ofagent
+
+.. _networking-ovs-dpdk:
+
+Networking OVS-DPDK
+-------------------
+
+* Git: https://github.com/stackforge/networking-ovs-dpdk
+* Launchpad: https://launchpad.net/networking-ovs-dpdk
+
+.. _networking-plumgrid:
+
+PLUMgrid
+---------
+
+* Git: https://github.com/stackforge/networking-plumgrid
+* Launchpad: https://launchpad.net/networking-plumgrid
+* PyPI: https://pypi.python.org/pypi/networking-plumgrid
+
+.. _networking-vsphere:
+
+.. _pluribus:
+
+.. _vmware-nsx:
+
+VMware
+------
+
+* Git: https://github.com/stackforge/vmware-nsx
+* Launchpad: https://launchpad.net/vmware-nsx
+* PyPI: https://pypi.python.org/pypi/vmware-nsx
