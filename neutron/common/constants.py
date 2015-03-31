@@ -24,6 +24,7 @@ PORT_STATUS_ACTIVE = 'ACTIVE'
 PORT_STATUS_BUILD = 'BUILD'
 PORT_STATUS_DOWN = 'DOWN'
 PORT_STATUS_ERROR = 'ERROR'
+PORT_STATUS_NOTAPPLICABLE = 'N/A'
 
 FLOATINGIP_STATUS_ACTIVE = 'ACTIVE'
 FLOATINGIP_STATUS_DOWN = 'DOWN'
@@ -141,6 +142,10 @@ IPV6_MODES = [DHCPV6_STATEFUL, DHCPV6_STATELESS, IPV6_SLAAC]
 
 IPV6_LLA_PREFIX = 'fe80::/64'
 
+# Human-readable ID to which default_ipv6_subnet_pool should be set to
+# indicate that IPv6 Prefix Delegation should be used to allocate subnet CIDRs
+IPV6_PD_POOL_ID = 'prefix_delegation'
+
 # Linux interface max length
 DEVICE_NAME_MAX_LEN = 15
 
@@ -154,13 +159,20 @@ ATTRIBUTES_TO_UPDATE = 'attributes_to_update'
 # but here it will be limited by this value for consistency.
 DB_INTEGER_MAX_VALUE = 2 ** 31 - 1
 
+# TODO(amuller): Re-define the RPC namespaces once Oslo messaging supports
+# Targets with multiple namespaces. Neutron will then implement callbacks
+# for its RPC clients in order to support rolling upgrades.
+
 # RPC Interface for agents to call DHCP API implemented on the plugin side
-RPC_NAMESPACE_DHCP_PLUGIN = 'dhcp'
+RPC_NAMESPACE_DHCP_PLUGIN = None
 # RPC interface for the metadata service to get info from the plugin side
-RPC_NAMESPACE_METADATA = 'metadata'
+RPC_NAMESPACE_METADATA = None
 # RPC interface for agent to plugin security group API
-RPC_NAMESPACE_SECGROUP = 'secgroup'
+RPC_NAMESPACE_SECGROUP = None
 # RPC interface for agent to plugin DVR api
-RPC_NAMESPACE_DVR = 'dvr'
+RPC_NAMESPACE_DVR = None
 # RPC interface for reporting state back to the plugin
-RPC_NAMESPACE_STATE = 'report_state'
+RPC_NAMESPACE_STATE = None
+
+# Default network MTU value when not configured
+DEFAULT_NETWORK_MTU = 0

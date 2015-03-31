@@ -15,12 +15,13 @@
 
 import sys
 
+from oslo_config import cfg
+from oslo_log import log as logging
+
 from neutron.agent import dhcp_agent
 from neutron.cmd.sanity import checks
 from neutron.common import config
 from neutron.i18n import _LE, _LW
-from neutron.openstack.common import log as logging
-from oslo_config import cfg
 
 
 LOG = logging.getLogger(__name__)
@@ -128,6 +129,14 @@ def check_vf_management():
     return result
 
 
+def check_ovsdb_native():
+    cfg.CONF.set_override('ovsdb_interface', 'native', group='OVS')
+    result = checks.ovsdb_native_supported()
+    if not result:
+        LOG.error(_LE('Check for native OVSDB support failed.'))
+    return result
+
+
 # Define CLI opts to test specific features, with a calback for the test
 OPTS = [
     BoolOptCallback('ovs_vxlan', check_ovs_vxlan, default=False,
@@ -146,6 +155,8 @@ OPTS = [
                     help=_('Check netns permission settings')),
     BoolOptCallback('dnsmasq_version', check_dnsmasq_version,
                     help=_('Check minimal dnsmasq version')),
+    BoolOptCallback('ovsdb_native', check_ovsdb_native,
+                    help=_('Check ovsdb native interface support')),
 ]
 
 
@@ -175,6 +186,8 @@ def enable_tests_from_config():
         cfg.CONF.set_override('read_netns', True)
     if cfg.CONF.dhcp_driver == 'neutron.agent.linux.dhcp.Dnsmasq':
         cfg.CONF.set_override('dnsmasq_version', True)
+    if cfg.CONF.OVS.ovsdb_interface == 'native':
+        cfg.CONF.set_override('ovsdb_native', True)
 
 
 def all_tests_passed():

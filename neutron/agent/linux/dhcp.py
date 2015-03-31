@@ -20,18 +20,20 @@ import re
 import shutil
 
 import netaddr
+from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 import six
 
 from neutron.agent.linux import external_process
 from neutron.agent.linux import ip_lib
+from neutron.agent.linux import iptables_manager
 from neutron.agent.linux import utils
 from neutron.common import constants
 from neutron.common import exceptions
 from neutron.common import ipv6_utils
 from neutron.common import utils as commonutils
 from neutron.i18n import _LE, _LI, _LW
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import uuidutils
 
 LOG = logging.getLogger(__name__)
@@ -170,7 +172,7 @@ class DhcpLocalProcess(DhcpBase):
                                                version, plugin)
         self.confs_dir = self.get_confs_dir(conf)
         self.network_conf_dir = os.path.join(self.confs_dir, network.id)
-        self._ensure_network_conf_dir()
+        utils.ensure_dir(self.network_conf_dir)
 
     @staticmethod
     def get_confs_dir(conf):
@@ -179,11 +181,6 @@ class DhcpLocalProcess(DhcpBase):
     def get_conf_file_name(self, kind):
         """Returns the file name for a given kind of config file."""
         return os.path.join(self.network_conf_dir, kind)
-
-    def _ensure_network_conf_dir(self):
-        """Ensures the directory for configuration files is created."""
-        if not os.path.isdir(self.network_conf_dir):
-            os.makedirs(self.network_conf_dir, 0o755)
 
     def _remove_config_files(self):
         shutil.rmtree(self.network_conf_dir, ignore_errors=True)
@@ -200,7 +197,7 @@ class DhcpLocalProcess(DhcpBase):
         if self.active:
             self.restart()
         elif self._enable_dhcp():
-            self._ensure_network_conf_dir()
+            utils.ensure_dir(self.network_conf_dir)
             interface_name = self.device_manager.setup(self.network)
             self.interface_name = interface_name
             self.spawn_process()
@@ -353,6 +350,12 @@ class Dnsmasq(DhcpLocalProcess):
                                 cidr.network, mode,
                                 cidr.prefixlen, lease))
                 possible_leases += cidr.size
+
+        if cfg.CONF.advertise_mtu:
+            mtu = self.network.mtu
+            # Do not advertise unknown mtu
+            if mtu > 0:
+                cmd.append('--dhcp-option-force=option:mtu,%d' % mtu)
 
         # Cap the limit because creating lots of subnets can inflate
         # this possible lease cap.
@@ -933,6 +936,7 @@ class DeviceManager(object):
                              interface_name,
                              port.mac_address,
                              namespace=network.namespace)
+            self.fill_dhcp_udp_checksums(namespace=network.namespace)
         ip_cidrs = []
         for fixed_ip in port.fixed_ips:
             subnet = fixed_ip.subnet
@@ -969,3 +973,12 @@ class DeviceManager(object):
 
         self.plugin.release_dhcp_port(network.id,
                                       self.get_device_id(network))
+
+    def fill_dhcp_udp_checksums(self, namespace):
+        """Ensure DHCP reply packets always have correct UDP checksums."""
+        iptables_mgr = iptables_manager.IptablesManager(use_ipv6=False,
+                                                        namespace=namespace)
+        ipv4_rule = ('-p udp --dport %d -j CHECKSUM --checksum-fill'
+                     % constants.DHCP_RESPONSE_PORT)
+        iptables_mgr.ipv4['mangle'].add_rule('POSTROUTING', ipv4_rule)
+        iptables_mgr.apply()

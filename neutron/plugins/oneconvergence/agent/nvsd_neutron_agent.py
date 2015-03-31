@@ -21,9 +21,10 @@ import time
 import eventlet
 eventlet.monkey_patch()
 
+from oslo_log import log as logging
 import oslo_messaging
 
-from neutron.agent.linux import ovs_lib
+from neutron.agent.common import ovs_lib
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config
@@ -31,7 +32,6 @@ from neutron.common import topics
 from neutron import context as n_context
 from neutron.extensions import securitygroup as ext_sg
 from neutron.i18n import _LE, _LI
-from neutron.openstack.common import log as logging
 from neutron.plugins.oneconvergence.lib import config
 
 LOG = logging.getLogger(__name__)

@@ -19,11 +19,13 @@ import os
 import eventlet
 
 from oslo_config import cfg
+from oslo_log import log as logging
 import oslo_messaging
 from oslo_utils import importutils
 
 from neutron.agent.linux import dhcp
 from neutron.agent.linux import external_process
+from neutron.agent.linux import utils as linux_utils
 from neutron.agent.metadata import driver as metadata_driver
 from neutron.agent import rpc as agent_rpc
 from neutron.common import constants
@@ -34,7 +36,6 @@ from neutron.common import utils
 from neutron import context
 from neutron.i18n import _LE, _LI, _LW
 from neutron import manager
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
 
 LOG = logging.getLogger(__name__)
@@ -62,8 +63,7 @@ class DhcpAgent(manager.Manager):
                                         ctx, self.conf.use_namespaces)
         # create dhcp dir to store dhcp info
         dhcp_dir = os.path.dirname("/%s/dhcp/" % self.conf.state_path)
-        if not os.path.isdir(dhcp_dir):
-            os.makedirs(dhcp_dir, 0o755)
+        linux_utils.ensure_dir(dhcp_dir)
         self.dhcp_version = self.dhcp_driver_cls.check_version()
         self._populate_networks_cache()
         self._process_monitor = external_process.ProcessMonitor(
@@ -316,8 +316,21 @@ class DhcpAgent(manager.Manager):
         updated_port = dhcp.DictModel(payload['port'])
         network = self.cache.get_network_by_id(updated_port.network_id)
         if network:
+            driver_action = 'reload_allocations'
+            if self._is_port_on_this_agent(updated_port):
+                orig = self.cache.get_port_by_id(updated_port['id'])
+                # assume IP change if not in cache
+                old_ips = {i['ip_address'] for i in orig['fixed_ips'] or []}
+                new_ips = {i['ip_address'] for i in updated_port['fixed_ips']}
+                if old_ips != new_ips:
+                    driver_action = 'restart'
             self.cache.put_port(updated_port)
-            self.call_driver('reload_allocations', network)
+            self.call_driver(driver_action, network)
+
+    def _is_port_on_this_agent(self, port):
+        thishost = utils.get_dhcp_agent_device_id(
+            port['network_id'], self.conf.host)
+        return port['device_id'] == thishost
 
     # Use the update handler for the port create event.
     port_create_end = port_update_end

@@ -28,6 +28,8 @@ import time
 import eventlet.wsgi
 from oslo_config import cfg
 import oslo_i18n
+from oslo_log import log as logging
+from oslo_log import loggers
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
 import routes.middleware
@@ -38,7 +40,6 @@ from neutron.common import exceptions as exception
 from neutron import context
 from neutron.db import api
 from neutron.i18n import _LE, _LI
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import service as common_service
 from neutron.openstack.common import systemd
 
@@ -98,9 +99,10 @@ class WorkerService(object):
 
     def start(self):
         # We may have just forked from parent process.  A quick disposal of the
-        # existing sql connections avoids producting 500 errors later when they
+        # existing sql connections avoids producing 500 errors later when they
         # are discovered to be broken.
-        api.get_engine().pool.dispose()
+        if CONF.database.connection:
+            api.get_engine().pool.dispose()
         self._server = self._service.pool.spawn(self._service._run,
                                                 self._application,
                                                 self._service._socket)
@@ -258,7 +260,7 @@ class Server(object):
         """Start a WSGI server in a new green thread."""
         eventlet.wsgi.server(socket, application,
                              max_size=self.num_threads,
-                             log=logging.WritableLogger(LOG),
+                             log=loggers.WritableLogger(LOG),
                              keepalive=CONF.wsgi_keep_alive,
                              socket_timeout=self.client_socket_timeout)
 

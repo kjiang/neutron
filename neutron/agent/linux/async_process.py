@@ -15,11 +15,11 @@
 import eventlet
 import eventlet.event
 import eventlet.queue
+from oslo_log import log as logging
 
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
 from neutron.i18n import _LE
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -172,6 +172,9 @@ class AsyncProcess(object):
                 LOG.exception(_LE('An error occurred while killing [%s].'),
                               self.cmd)
                 return False
+
+        if self._process:
+            self._process.wait()
         return True
 
     def _handle_process_error(self):
@@ -188,7 +191,8 @@ class AsyncProcess(object):
     def _watch_process(self, callback, kill_event):
         while not kill_event.ready():
             try:
-                if not callback():
+                output = callback()
+                if not output and output != "":
                     break
             except Exception:
                 LOG.exception(_LE('An error occurred while communicating '

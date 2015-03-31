@@ -25,6 +25,7 @@ import sys
 
 from oslo_concurrency import lockutils
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import excutils
 
 from neutron.agent.common import config
@@ -33,7 +34,6 @@ from neutron.agent.linux import utils as linux_utils
 from neutron.common import exceptions as n_exc
 from neutron.common import utils
 from neutron.i18n import _LE, _LW
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -384,8 +384,9 @@ class IptablesManager(object):
             try:
                 self.defer_apply_off()
             except Exception:
-                raise n_exc.IpTablesApplyException('Failure applying ip '
-                                                   'tables rules')
+                msg = _LE('Failure applying iptables rules')
+                LOG.exception(msg)
+                raise n_exc.IpTablesApplyException(msg)
 
     def defer_apply_on(self):
         self.iptables_apply_deferred = True

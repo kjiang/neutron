@@ -13,8 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
 import netaddr
 from oslo_config import cfg
+from oslo_log import log as logging
 
 from neutron.agent import firewall
 from neutron.agent.linux import ipset_manager
@@ -22,8 +24,8 @@ from neutron.agent.linux import iptables_comments as ic
 from neutron.agent.linux import iptables_manager
 from neutron.common import constants
 from neutron.common import ipv6_utils
+from neutron.extensions import portsecurity as psec
 from neutron.i18n import _LI
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -47,28 +49,32 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
     IPTABLES_DIRECTION = {INGRESS_DIRECTION: 'physdev-out',
                           EGRESS_DIRECTION: 'physdev-in'}
 
-    def __init__(self):
+    def __init__(self, namespace=None):
         self.iptables = iptables_manager.IptablesManager(
-            use_ipv6=ipv6_utils.is_enabled())
+            use_ipv6=ipv6_utils.is_enabled(),
+            namespace=namespace)
         # TODO(majopela, shihanzhang): refactor out ipset to a separate
         # driver composed over this one
-        self.ipset = ipset_manager.IpsetManager()
+        self.ipset = ipset_manager.IpsetManager(namespace=namespace)
         # list of port which has security group
         self.filtered_ports = {}
+        self.unfiltered_ports = {}
         self._add_fallback_chain_v4v6()
         self._defer_apply = False
         self._pre_defer_filtered_ports = None
+        self._pre_defer_unfiltered_ports = None
         # List of security group rules for ports residing on this host
         self.sg_rules = {}
         self.pre_sg_rules = None
         # List of security group member ips for ports residing on this host
-        self.sg_members = {}
+        self.sg_members = collections.defaultdict(
+            lambda: collections.defaultdict(list))
         self.pre_sg_members = None
         self.enable_ipset = cfg.CONF.SECURITYGROUP.enable_ipset
 
     @property
     def ports(self):
-        return self.filtered_ports
+        return dict(self.filtered_ports, **self.unfiltered_ports)
 
     def update_security_group_rules(self, sg_id, sg_rules):
         LOG.debug("Update rules of security group (%s)", sg_id)
@@ -76,44 +82,74 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
 
     def update_security_group_members(self, sg_id, sg_members):
         LOG.debug("Update members of security group (%s)", sg_id)
-        self.sg_members[sg_id] = sg_members
+        self.sg_members[sg_id] = collections.defaultdict(list, sg_members)
+
+    def _ps_enabled(self, port):
+        return port.get(psec.PORTSECURITY, True)
+
+    def _set_ports(self, port):
+        if not self._ps_enabled(port):
+            self.unfiltered_ports[port['device']] = port
+            self.filtered_ports.pop(port['device'], None)
+        else:
+            self.filtered_ports[port['device']] = port
+            self.unfiltered_ports.pop(port['device'], None)
+
+    def _unset_ports(self, port):
+        self.unfiltered_ports.pop(port['device'], None)
+        self.filtered_ports.pop(port['device'], None)
 
     def prepare_port_filter(self, port):
         LOG.debug("Preparing device (%s) filter", port['device'])
         self._remove_chains()
-        self.filtered_ports[port['device']] = port
+        self._set_ports(port)
+
         # each security group has it own chains
         self._setup_chains()
         self.iptables.apply()
 
     def update_port_filter(self, port):
         LOG.debug("Updating device (%s) filter", port['device'])
-        if port['device'] not in self.filtered_ports:
+        if port['device'] not in self.ports:
             LOG.info(_LI('Attempted to update port filter which is not '
                          'filtered %s'), port['device'])
             return
         self._remove_chains()
-        self.filtered_ports[port['device']] = port
+        self._set_ports(port)
         self._setup_chains()
         self.iptables.apply()
 
     def remove_port_filter(self, port):
         LOG.debug("Removing device (%s) filter", port['device'])
-        if not self.filtered_ports.get(port['device']):
+        if port['device'] not in self.ports:
             LOG.info(_LI('Attempted to remove port filter which is not '
                          'filtered %r'), port)
             return
         self._remove_chains()
-        self.filtered_ports.pop(port['device'], None)
+        self._unset_ports(port)
         self._setup_chains()
         self.iptables.apply()
+
+    def _add_accept_rule_port_sec(self, port, direction):
+        self._update_port_sec_rules(port, direction, add=True)
+
+    def _remove_rule_port_sec(self, port, direction):
+        self._update_port_sec_rules(port, direction, add=False)
+
+    def _remove_rule_from_chain_v4v6(self, chain_name, ipv4_rules, ipv6_rules):
+        for rule in ipv4_rules:
+            self.iptables.ipv4['filter'].remove_rule(chain_name, rule)
+
+        for rule in ipv6_rules:
+            self.iptables.ipv6['filter'].remove_rule(chain_name, rule)
 
     def _setup_chains(self):
         """Setup ingress and egress chain for a port."""
         if not self._defer_apply:
-            self._setup_chains_apply(self.filtered_ports)
+            self._setup_chains_apply(self.filtered_ports,
+                                     self.unfiltered_ports)
 
-    def _setup_chains_apply(self, ports):
+    def _setup_chains_apply(self, ports, unfiltered_ports):
         self._add_chain_by_name_v4v6(SG_CHAIN)
         for port in ports.values():
             self._setup_chain(port, INGRESS_DIRECTION)
@@ -121,16 +157,24 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
             self.iptables.ipv4['filter'].add_rule(SG_CHAIN, '-j ACCEPT')
             self.iptables.ipv6['filter'].add_rule(SG_CHAIN, '-j ACCEPT')
 
+        for port in unfiltered_ports.values():
+            self._add_accept_rule_port_sec(port, INGRESS_DIRECTION)
+            self._add_accept_rule_port_sec(port, EGRESS_DIRECTION)
+
     def _remove_chains(self):
         """Remove ingress and egress chain for a port."""
         if not self._defer_apply:
-            self._remove_chains_apply(self.filtered_ports)
+            self._remove_chains_apply(self.filtered_ports,
+                                      self.unfiltered_ports)
 
-    def _remove_chains_apply(self, ports):
+    def _remove_chains_apply(self, ports, unfiltered_ports):
         for port in ports.values():
             self._remove_chain(port, INGRESS_DIRECTION)
             self._remove_chain(port, EGRESS_DIRECTION)
             self._remove_chain(port, SPOOF_FILTER)
+        for port in unfiltered_ports.values():
+            self._remove_rule_port_sec(port, INGRESS_DIRECTION)
+            self._remove_rule_port_sec(port, EGRESS_DIRECTION)
         self._remove_chain_by_name_v4v6(SG_CHAIN)
 
     def _setup_chain(self, port, DIRECTION):
@@ -169,6 +213,30 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
 
     def _get_device_name(self, port):
         return port['device']
+
+    def _update_port_sec_rules(self, port, direction, add=False):
+        # add/remove rules in FORWARD and INPUT chain
+        device = self._get_device_name(port)
+
+        jump_rule = ['-m physdev --%s %s --physdev-is-bridged '
+                     '-j ACCEPT' % (self.IPTABLES_DIRECTION[direction],
+                                    device)]
+        if add:
+            self._add_rules_to_chain_v4v6(
+                'FORWARD', jump_rule, jump_rule, comment=ic.PORT_SEC_ACCEPT)
+        else:
+            self._remove_rule_from_chain_v4v6('FORWARD', jump_rule, jump_rule)
+
+        if direction == EGRESS_DIRECTION:
+            jump_rule = ['-m physdev --%s %s --physdev-is-bridged '
+                         '-j ACCEPT' % (self.IPTABLES_DIRECTION[direction],
+                                        device)]
+            if add:
+                self._add_rules_to_chain_v4v6('INPUT', jump_rule, jump_rule,
+                                              comment=ic.PORT_SEC_ACCEPT)
+            else:
+                self._remove_rule_from_chain_v4v6(
+                    'INPUT', jump_rule, jump_rule)
 
     def _add_chain(self, port, direction):
         chain_name = self._port_chain_name(port, direction)
@@ -321,12 +389,12 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         else:
             yield rule
 
-    def _get_remote_sg_ids(self, port, direction):
+    def _get_remote_sg_ids(self, port, direction=None):
         sg_ids = port.get('security_groups', [])
         remote_sg_ids = {constants.IPv4: [], constants.IPv6: []}
         for sg_id in sg_ids:
             for rule in self.sg_rules.get(sg_id, []):
-                if rule['direction'] == direction:
+                if not direction or rule['direction'] == direction:
                     remote_sg_id = rule.get('remote_group_id')
                     ether_type = rule.get('ethertype')
                     if remote_sg_id and ether_type:
@@ -372,15 +440,12 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                             ipv6_iptables_rules)
         self._drop_dhcp_rule(ipv4_iptables_rules, ipv6_iptables_rules)
 
-    def _get_current_sg_member_ips(self, sg_id, ethertype):
-        return self.sg_members.get(sg_id, {}).get(ethertype, [])
-
     def _update_ipset_members(self, security_group_ids):
-        for ethertype, sg_ids in security_group_ids.items():
+        for ip_version, sg_ids in security_group_ids.items():
             for sg_id in sg_ids:
-                current_ips = self._get_current_sg_member_ips(sg_id, ethertype)
+                current_ips = self.sg_members[sg_id][ip_version]
                 if current_ips:
-                    self.ipset.set_members(sg_id, ethertype, current_ips)
+                    self.ipset.set_members(sg_id, ip_version, current_ips)
 
     def _generate_ipset_rule_args(self, sg_rule, remote_gid):
         ethertype = sg_rule.get('ethertype')
@@ -496,61 +561,106 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
         if not self._defer_apply:
             self.iptables.defer_apply_on()
             self._pre_defer_filtered_ports = dict(self.filtered_ports)
+            self._pre_defer_unfiltered_ports = dict(self.unfiltered_ports)
             self.pre_sg_members = dict(self.sg_members)
             self.pre_sg_rules = dict(self.sg_rules)
             self._defer_apply = True
 
     def _remove_unused_security_group_info(self):
-        need_removed_ipsets = {constants.IPv4: set(),
-                               constants.IPv6: set()}
-        need_removed_security_groups = set()
-        remote_group_ids = {constants.IPv4: set(),
-                            constants.IPv6: set()}
-        current_group_ids = set()
-        for port in self.filtered_ports.values():
-            for direction in INGRESS_DIRECTION, EGRESS_DIRECTION:
-                for ethertype, sg_ids in self._get_remote_sg_ids(
-                        port, direction).items():
-                    remote_group_ids[ethertype].update(sg_ids)
-            groups = port.get('security_groups', [])
-            current_group_ids.update(groups)
+        """Remove any unnecessary local security group info or unused ipsets.
 
-        for ethertype in [constants.IPv4, constants.IPv6]:
-            need_removed_ipsets[ethertype].update(
-                [x for x in self.pre_sg_members if x not in remote_group_ids[
-                    ethertype]])
-            need_removed_security_groups.update(
-                [x for x in self.pre_sg_rules if x not in current_group_ids])
+        This function has to be called after applying the last iptables
+        rules, so we're in a point where no iptable rule depends
+        on an ipset we're going to delete.
+        """
+        filtered_ports = self.filtered_ports.values()
 
-        # Remove unused ip sets (sg_members and kernel ipset if we
-        # are using ipset)
-        for ethertype, remove_set_ids in need_removed_ipsets.items():
-            for remove_set_id in remove_set_ids:
-                if self.sg_members.get(remove_set_id, {}).get(ethertype, []):
-                    self.sg_members[remove_set_id][ethertype] = []
-                if self.enable_ipset:
-                    self.ipset.destroy(remove_set_id, ethertype)
+        remote_sgs_to_remove = self._determine_remote_sgs_to_remove(
+            filtered_ports)
 
-        # Remove unused remote security group member ips
-        sg_ids = self.sg_members.keys()
-        for sg_id in sg_ids:
-            if not (self.sg_members[sg_id].get(constants.IPv4, [])
-                    or self.sg_members[sg_id].get(constants.IPv6, [])):
-                self.sg_members.pop(sg_id, None)
+        for ip_version, remote_sg_ids in remote_sgs_to_remove.iteritems():
+            self._clear_sg_members(ip_version, remote_sg_ids)
+            if self.enable_ipset:
+                self._remove_ipsets_for_remote_sgs(ip_version, remote_sg_ids)
+
+        self._remove_unused_sg_members()
 
         # Remove unused security group rules
-        for remove_group_id in need_removed_security_groups:
-            if remove_group_id in self.sg_rules:
-                self.sg_rules.pop(remove_group_id, None)
+        for remove_group_id in self._determine_sg_rules_to_remove(
+                filtered_ports):
+            self.sg_rules.pop(remove_group_id, None)
+
+    def _determine_remote_sgs_to_remove(self, filtered_ports):
+        """Calculate which remote security groups we don't need anymore.
+
+        We do the calculation for each ip_version.
+        """
+        sgs_to_remove_per_ipversion = {constants.IPv4: set(),
+                                       constants.IPv6: set()}
+        remote_group_id_sets = self._get_remote_sg_ids_sets_by_ipversion(
+            filtered_ports)
+        for ip_version, remote_group_id_set in (
+                remote_group_id_sets.iteritems()):
+            sgs_to_remove_per_ipversion[ip_version].update(
+                set(self.pre_sg_members) - remote_group_id_set)
+        return sgs_to_remove_per_ipversion
+
+    def _get_remote_sg_ids_sets_by_ipversion(self, filtered_ports):
+        """Given a port, calculates the remote sg references by ip_version."""
+        remote_group_id_sets = {constants.IPv4: set(),
+                                constants.IPv6: set()}
+        for port in filtered_ports:
+            for ip_version, sg_ids in self._get_remote_sg_ids(
+                    port).iteritems():
+                remote_group_id_sets[ip_version].update(sg_ids)
+        return remote_group_id_sets
+
+    def _determine_sg_rules_to_remove(self, filtered_ports):
+        """Calculate which security groups need to be removed.
+
+        We find out by subtracting our previous sg group ids,
+        with the security groups associated to a set of ports.
+        """
+        port_group_ids = self._get_sg_ids_set_for_ports(filtered_ports)
+        return set(self.pre_sg_rules) - port_group_ids
+
+    def _get_sg_ids_set_for_ports(self, filtered_ports):
+        """Get the port security group ids as a set."""
+        port_group_ids = set()
+        for port in filtered_ports:
+            port_group_ids.update(port.get('security_groups', []))
+        return port_group_ids
+
+    def _clear_sg_members(self, ip_version, remote_sg_ids):
+        """Clear our internal cache of sg members matching the parameters."""
+        for remote_sg_id in remote_sg_ids:
+            if self.sg_members[remote_sg_id][ip_version]:
+                self.sg_members[remote_sg_id][ip_version] = []
+
+    def _remove_ipsets_for_remote_sgs(self, ip_version, remote_sg_ids):
+        """Remove system ipsets matching the provided parameters."""
+        for remote_sg_id in remote_sg_ids:
+            self.ipset.destroy(remote_sg_id, ip_version)
+
+    def _remove_unused_sg_members(self):
+        """Remove sg_member entries where no IPv4 or IPv6 is associated."""
+        for sg_id in self.sg_members.keys():
+            sg_has_members = (self.sg_members[sg_id][constants.IPv4] or
+                              self.sg_members[sg_id][constants.IPv6])
+            if not sg_has_members:
+                del self.sg_members[sg_id]
 
     def filter_defer_apply_off(self):
         if self._defer_apply:
             self._defer_apply = False
-            self._remove_chains_apply(self._pre_defer_filtered_ports)
-            self._setup_chains_apply(self.filtered_ports)
+            self._remove_chains_apply(self._pre_defer_filtered_ports,
+                                      self._pre_defer_unfiltered_ports)
+            self._setup_chains_apply(self.filtered_ports,
+                                     self.unfiltered_ports)
             self.iptables.defer_apply_off()
             self._remove_unused_security_group_info()
             self._pre_defer_filtered_ports = None
+            self._pre_defer_unfiltered_ports = None
 
 
 class OVSHybridIptablesFirewallDriver(IptablesFirewallDriver):

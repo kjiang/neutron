@@ -14,6 +14,7 @@
 #    under the License.
 
 from oslo_config import cfg
+from oslo_log import log
 import stevedore
 
 from neutron.api.v2 import attributes
@@ -22,7 +23,6 @@ from neutron.extensions import multiprovidernet as mpnet
 from neutron.extensions import portbindings
 from neutron.extensions import providernet as provider
 from neutron.i18n import _LE, _LI
-from neutron.openstack.common import log
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import db
 from neutron.plugins.ml2 import driver_api as api
@@ -165,6 +165,7 @@ class TypeManager(stevedore.named.NamedExtensionManager):
         """Call type drivers to create network segments."""
         segments = self._process_provider_create(network)
         session = context.session
+        mtu = []
         with session.begin(subtransactions=True):
             network_id = network['id']
             if segments:
@@ -173,9 +174,14 @@ class TypeManager(stevedore.named.NamedExtensionManager):
                         session, segment)
                     db.add_network_segment(session, network_id,
                                            segment, segment_index)
+                    if segment.get(api.MTU) > 0:
+                        mtu.append(segment[api.MTU])
             else:
                 segment = self.allocate_tenant_segment(session)
                 db.add_network_segment(session, network_id, segment)
+                if segment.get(api.MTU) > 0:
+                    mtu.append(segment[api.MTU])
+        network[api.MTU] = min(mtu) if mtu else 0
 
     def is_partial_segment(self, segment):
         network_type = segment[api.NETWORK_TYPE]
@@ -287,6 +293,19 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
             LOG.info(_LI("Initializing mechanism driver '%s'"), driver.name)
             driver.obj.initialize()
 
+    def _check_vlan_transparency(self, context):
+        """Helper method for checking vlan transparecncy support.
+
+        :param context: context parameter to pass to each method call
+        :raises: neutron.plugins.ml2.common.VlanTransparencyError
+        if any mechanism driver doesn't support vlan transparency.
+        """
+        if not cfg.CONF.vlan_transparent:
+            return
+        for driver in self.ordered_mech_drivers:
+            if driver.obj.check_vlan_transparency(context) is False:
+                raise ml2_exc.VlanTransparencyError()
+
     def _call_on_drivers(self, method_name, context,
                          continue_on_failure=False):
         """Helper method for calling a method across all mechanism drivers.
@@ -326,6 +345,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         to the caller, triggering a rollback. There is no guarantee
         that all mechanism drivers are called in this case.
         """
+        self._check_vlan_transparency(context)
         self._call_on_drivers("create_network_precommit", context)
 
     def create_network_postcommit(self, context):

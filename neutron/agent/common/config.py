@@ -16,9 +16,9 @@
 import os
 
 from oslo_config import cfg
+from oslo_log import log as logging
 
 from neutron.common import config
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -31,6 +31,12 @@ ROOT_HELPER_OPTS = [
                 default=True,
                 help=_('Use the root helper to read the namespaces from '
                        'the operating system.')),
+    # We can't just use root_helper=sudo neutron-rootwrap-daemon $cfg because
+    # it isn't appropriate for long-lived processes spawned with create_process
+    # Having a bool use_rootwrap_daemon option precludes specifying the
+    # rootwrap daemon command, which may be necessary for Xen?
+    cfg.StrOpt('root_helper_daemon',
+               help=_('Root helper daemon application to use when possible.')),
 ]
 
 AGENT_STATE_OPTS = [
@@ -47,7 +53,9 @@ INTERFACE_DRIVER_OPTS = [
 
 USE_NAMESPACES_OPTS = [
     cfg.BoolOpt('use_namespaces', default=True,
-                help=_("Allow overlapping IP.")),
+                help=_("Allow overlapping IP. This option is deprecated and "
+                       "will be removed in a future release."),
+                deprecated_for_removal=True),
 ]
 
 IPTABLES_OPTS = [
@@ -59,7 +67,7 @@ PROCESS_MONITOR_OPTS = [
     cfg.StrOpt('check_child_processes_action', default='respawn',
                choices=['respawn', 'exit'],
                help=_('Action to be executed when a child process dies')),
-    cfg.IntOpt('check_child_processes_interval', default=0,
+    cfg.IntOpt('check_child_processes_interval', default=60,
                help=_('Interval between checks of child process liveness '
                       '(seconds), use 0 to disable')),
 ]

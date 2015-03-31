@@ -16,14 +16,15 @@
 import re
 
 import netaddr
+from oslo_log import log as logging
+import six
 
+from neutron.agent.common import ovs_lib
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import ip_link_support
-from neutron.agent.linux import ovs_lib
 from neutron.agent.linux import utils as agent_utils
 from neutron.common import utils
 from neutron.i18n import _LE
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import uuidutils
 from neutron.plugins.common import constants as const
 from neutron.plugins.openvswitch.common import constants as ovs_const
@@ -152,3 +153,19 @@ def dnsmasq_version_supported():
                   "Exception: %s", e)
         return False
     return True
+
+
+def ovsdb_native_supported():
+    # Running the test should ensure we are configured for OVSDB native
+    try:
+        ovs = ovs_lib.BaseOVS()
+        ovs.get_bridges()
+        return True
+    except ImportError as ex:
+        LOG.error(_LE("Failed to import required modules. Ensure that the "
+                      "python-openvswitch package is installed. Error: %s"),
+                  ex.message)
+    except Exception as ex:
+        LOG.exception(six.text_type(ex))
+
+    return False

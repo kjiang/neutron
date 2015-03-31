@@ -23,10 +23,11 @@ import eventlet
 eventlet.monkey_patch()
 
 from oslo_config import cfg
+from oslo_log import log as logging
 import oslo_messaging
 
+from neutron.agent.common import ovs_lib
 from neutron.agent.linux import ip_lib
-from neutron.agent.linux import ovs_lib
 from neutron.agent import rpc as agent_rpc
 from neutron.common import config as common_config
 from neutron.common import constants as n_const
@@ -34,7 +35,6 @@ from neutron.common import topics
 from neutron.common import utils as n_utils
 from neutron.i18n import _LE, _LI
 from neutron import context
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
 from neutron.plugins.ibm.common import constants
 
@@ -138,11 +138,11 @@ class SdnveNeutronAgent(object):
         new_controller = info.get('new_controller')
         out_of_band = info.get('out_of_band')
         if self.int_br and new_controller:
-            LOG.debug("info_update received. New controller"
+            LOG.debug("info_update received. New controller "
                       "is to be set to: %s", new_controller)
             self.int_br.set_controller(["tcp:" + new_controller])
             if out_of_band:
-                LOG.debug("info_update received. New controller"
+                LOG.debug("info_update received. New controller "
                           "is set to be out of band")
                 self.int_br.set_db_attribute("Controller",
                                              self.int_bridge_name,

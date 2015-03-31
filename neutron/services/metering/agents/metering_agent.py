@@ -16,6 +16,7 @@ import sys
 import time
 
 from oslo_config import cfg
+from oslo_log import log as logging
 import oslo_messaging
 from oslo_utils import importutils
 
@@ -29,7 +30,6 @@ from neutron.common import utils
 from neutron import context
 from neutron.i18n import _LE, _LI, _LW
 from neutron import manager
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
 from neutron.openstack.common import periodic_task
 from neutron.openstack.common import service
@@ -215,6 +215,14 @@ class MeteringAgent(MeteringPluginRpc, manager.Manager):
     def _get_traffic_counters(self, context, routers):
         LOG.debug("Get router traffic counters")
         return self._invoke_driver(context, routers, 'get_traffic_counters')
+
+    def add_metering_label_rule(self, context, routers):
+        return self._invoke_driver(context, routers,
+                                   'add_metering_label_rule')
+
+    def remove_metering_label_rule(self, context, routers):
+        return self._invoke_driver(context, routers,
+                                   'remove_metering_label_rule')
 
     def update_metering_label_rules(self, context, routers):
         LOG.debug("Update metering rules from agent")

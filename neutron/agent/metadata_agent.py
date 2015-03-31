@@ -15,6 +15,7 @@
 import sys
 
 from oslo_config import cfg
+from oslo_log import log as logging
 
 from neutron.agent.common import config as agent_conf
 from neutron.agent.metadata import agent
@@ -22,7 +23,6 @@ from neutron.agent.metadata import config as metadata_conf
 from neutron.common import config
 from neutron.common import utils
 from neutron.openstack.common.cache import cache
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -36,5 +36,7 @@ def main():
     config.init(sys.argv[1:])
     config.setup_logging()
     utils.log_opt_values(LOG)
+    # metadata agent need not connect DB
+    cfg.CONF.set_override("connection", "", "database")
     proxy = agent.UnixDomainMetadataProxy(cfg.CONF)
     proxy.run()

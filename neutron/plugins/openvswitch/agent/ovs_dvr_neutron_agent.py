@@ -13,15 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
+from oslo_log import log as logging
 import oslo_messaging
 from oslo_utils import excutils
 
-from neutron.api.rpc.handlers import dvr_rpc
 from neutron.common import constants as n_const
 from neutron.common import utils as n_utils
 from neutron.i18n import _LE, _LI, _LW
-from neutron.openstack.common import log as logging
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.openvswitch.common import constants
 
@@ -81,7 +79,7 @@ class OVSPort(object):
         self.device_owner = device_owner
 
     def __str__(self):
-        return ("OVSPort: id = %s, ofport = %s, mac = %s,"
+        return ("OVSPort: id = %s, ofport = %s, mac = %s, "
                 "device_owner = %s, subnets = %s" %
                 (self.id, self.ofport, self.mac,
                  self.device_owner, self.subnets))
@@ -108,7 +106,7 @@ class OVSPort(object):
         return self.ofport
 
 
-class OVSDVRNeutronAgent(dvr_rpc.DVRAgentRpcApiMixin):
+class OVSDVRNeutronAgent(object):
     '''
     Implements OVS-based DVR(Distributed Virtual Router), for overlay networks.
     '''

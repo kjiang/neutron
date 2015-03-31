@@ -24,13 +24,13 @@ from keystoneclient import auth
 from keystoneclient import session as ks_session
 from oslo_config import cfg
 from oslo_db import options as db_options
+from oslo_log import log as logging
 import oslo_messaging
 from paste import deploy
 
 from neutron.api.v2 import attributes
 from neutron.common import utils
 from neutron.i18n import _LI
-from neutron.openstack.common import log as logging
 from neutron import version
 
 
@@ -71,6 +71,9 @@ core_opts = [
                help=_("Maximum number of host routes per subnet")),
     cfg.IntOpt('max_fixed_ips_per_port', default=5,
                help=_("Maximum number of fixed ips per port")),
+    cfg.IntOpt('default_ipv6_subnet_pool', default=None,
+               help=_("Default subnet-pool to be used for automatic subnet "
+                      "CIDR allocation")),
     cfg.IntOpt('dhcp_lease_duration', default=86400,
                deprecated_name='dhcp_lease_time',
                help=_("DHCP lease duration (in seconds). Use -1 to tell "
@@ -81,7 +84,7 @@ core_opts = [
     cfg.BoolOpt('allow_overlapping_ips', default=False,
                 help=_("Allow overlapping IP support in Neutron")),
     cfg.StrOpt('host', default=utils.get_hostname(),
-               help=_("Hostname to be used by the neutron server, agents and"
+               help=_("Hostname to be used by the neutron server, agents and "
                       "services running on this machine. All the agents and "
                       "services running on this machine must use the same "
                       "host value.")),
@@ -121,6 +124,13 @@ core_opts = [
     cfg.IntOpt('send_events_interval', default=2,
                help=_('Number of seconds between sending events to nova if '
                       'there are any events to send.')),
+    cfg.BoolOpt('advertise_mtu', default=False,
+                help=_('If True, effort is made to advertise MTU settings '
+                       'to VMs via network methods (DHCP and RA MTU options) '
+                       'when the network\'s preferred MTU is known.')),
+    cfg.BoolOpt('vlan_transparent', default=False,
+                help=_('If True, then allow plugins that support it to '
+                       'create VLAN transparent networks.')),
 ]
 
 core_cli_opts = [
@@ -163,6 +173,8 @@ nova_opts = [
 ]
 cfg.CONF.register_opts(nova_opts, group=NOVA_CONF_SECTION)
 
+logging.register_options(cfg.CONF)
+
 
 def init(args, **kwargs):
     cfg.CONF(args=args, project='neutron',
@@ -185,7 +197,7 @@ def init(args, **kwargs):
 def setup_logging():
     """Sets up the logging options for a log with supplied name."""
     product_name = "neutron"
-    logging.setup(product_name)
+    logging.setup(cfg.CONF, product_name)
     LOG.info(_LI("Logging enabled!"))
     LOG.info(_LI("%(prog)s version %(version)s"),
              {'prog': sys.argv[0],

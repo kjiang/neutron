@@ -19,6 +19,7 @@ import random
 
 from oslo_config import cfg
 from oslo_db import exception as db_exc
+from oslo_log import log as logging
 import six
 from sqlalchemy import sql
 
@@ -28,7 +29,6 @@ from neutron.db import l3_agentschedulers_db
 from neutron.db import l3_db
 from neutron.db import l3_hamode_db
 from neutron.i18n import _LE, _LW
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class L3Scheduler(object):
         unscheduled_routers = []
         for router in routers:
             l3_agents = plugin.get_l3_agents_hosting_routers(
-                context, [router['id']], admin_state_up=True)
+                context, [router['id']])
             if l3_agents:
                 LOG.debug('Router %(router_id)s has already been '
                           'hosted by L3 agent %(agent_id)s',

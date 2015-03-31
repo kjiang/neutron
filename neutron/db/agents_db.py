@@ -14,9 +14,9 @@
 #    under the License.
 
 from eventlet import greenthread
-
 from oslo_config import cfg
 from oslo_db import exception as db_exc
+from oslo_log import log as logging
 import oslo_messaging
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
@@ -31,14 +31,33 @@ from neutron.db import models_v2
 from neutron.extensions import agent as ext_agent
 from neutron.i18n import _LW
 from neutron import manager
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-cfg.CONF.register_opt(
+
+AGENT_OPTS = [
     cfg.IntOpt('agent_down_time', default=75,
                help=_("Seconds to regard the agent is down; should be at "
                       "least twice report_interval, to be sure the "
-                      "agent is down for good.")))
+                      "agent is down for good.")),
+    cfg.StrOpt('dhcp_load_type', default='networks',
+               choices=['networks', 'subnets', 'ports'],
+               help=_('Representing the resource type whose load is being '
+                      'reported by the agent. This can be "networks", '
+                      '"subnets" or "ports". '
+                      'When specified (Default is networks), the server will '
+                      'extract particular load sent as part of its agent '
+                      'configuration object from the agent report state, '
+                      'which is the number of resources being consumed, at '
+                      'every report_interval.'
+                      'dhcp_load_type can be used in combination with '
+                      'network_scheduler_driver = '
+                      'neutron.scheduler.dhcp_agent_scheduler.WeightScheduler '
+                      'When the network_scheduler_driver is WeightScheduler, '
+                      'dhcp_load_type can be configured to represent the '
+                      'choice for the resource being balanced. '
+                      'Example: dhcp_load_type=networks')),
+]
+cfg.CONF.register_opts(AGENT_OPTS)
 
 
 class Agent(model_base.BASEV2, models_v2.HasId):
@@ -69,6 +88,8 @@ class Agent(model_base.BASEV2, models_v2.HasId):
     description = sa.Column(sa.String(255))
     # configurations: a json dict string, I think 4095 is enough
     configurations = sa.Column(sa.String(4095), nullable=False)
+    # load - number of resources hosted by the agent
+    load = sa.Column(sa.Integer, server_default='0', nullable=False)
 
     @property
     def is_active(self):
@@ -117,6 +138,16 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
                            'host': agent_db.host})
             conf = {}
         return conf
+
+    def _get_agent_load(self, agent):
+        configs = agent.get('configurations', {})
+        load_type = None
+        load = 0
+        if(agent['agent_type'] == constants.AGENT_TYPE_DHCP):
+            load_type = cfg.CONF.dhcp_load_type
+        if load_type:
+            load = int(configs.get(load_type, 0))
+        return load
 
     def _make_agent_dict(self, agent, fields=None):
         attr = ext_agent.RESOURCE_ATTRIBUTE_MAP.get(
@@ -179,6 +210,7 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
 
             configurations_dict = agent.get('configurations', {})
             res['configurations'] = jsonutils.dumps(configurations_dict)
+            res['load'] = self._get_agent_load(agent)
             current_time = timeutils.utcnow()
             try:
                 agent_db = self._get_agent_by_type_and_host(

@@ -19,10 +19,10 @@ import time
 
 import mock
 from oslo_config import cfg
+from oslo_log import log
 
+from neutron.agent.common import ovs_lib
 from neutron.agent.linux import ip_lib
-from neutron.agent.linux import ovs_lib
-from neutron.openstack.common import log
 from neutron.plugins.common import constants as p_const
 from neutron.plugins.openvswitch.agent import ovs_neutron_agent
 from neutron.plugins.openvswitch.common import constants
@@ -133,7 +133,7 @@ class TunnelTest(base.BaseTestCase):
                                          self.TUN_BRIDGE,
                                          self.MAP_TUN_BRIDGE]
 
-        self.execute = mock.patch('neutron.agent.linux.utils.execute').start()
+        self.execute = mock.patch('neutron.agent.common.utils.execute').start()
 
         self._define_expected_calls()
 
@@ -514,7 +514,7 @@ class TunnelTest(base.BaseTestCase):
         ]
 
         with contextlib.nested(
-            mock.patch.object(log.ContextAdapter, 'exception'),
+            mock.patch.object(log.KeywordArgumentAdapter, 'exception'),
             mock.patch.object(ovs_neutron_agent.OVSNeutronAgent,
                               'scan_ports'),
             mock.patch.object(ovs_neutron_agent.OVSNeutronAgent,

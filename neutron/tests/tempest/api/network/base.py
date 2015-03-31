@@ -14,13 +14,13 @@
 #    under the License.
 
 import netaddr
+from oslo_log import log as logging
+from tempest_lib.common.utils import data_utils
 from tempest_lib import exceptions as lib_exc
 
 from neutron.tests.api.contrib import clients
-from neutron.tests.tempest.common.utils import data_utils
 from neutron.tests.tempest import config
 from neutron.tests.tempest import exceptions
-from neutron.openstack.common import log as logging
 import neutron.tests.tempest.test
 
 CONF = config.CONF
@@ -70,6 +70,7 @@ class BaseNetworkTest(neutron.tests.tempest.test.BaseTestCase):
         cls.network_cfg = CONF.network
         cls.client = os.network_client
         cls.networks = []
+        cls.shared_networks = []
         cls.subnets = []
         cls.ports = []
         cls.routers = []
@@ -157,6 +158,12 @@ class BaseNetworkTest(neutron.tests.tempest.test.BaseTestCase):
             for network in cls.networks:
                 cls._try_delete_resource(cls.client.delete_network,
                                          network['id'])
+
+            # Clean up shared networks
+            for network in cls.shared_networks:
+                cls._try_delete_resource(cls.admin_client.delete_network,
+                                         network['id'])
+
             cls.clear_isolated_creds()
         super(BaseNetworkTest, cls).resource_cleanup()
 
@@ -188,6 +195,15 @@ class BaseNetworkTest(neutron.tests.tempest.test.BaseTestCase):
         body = cls.client.create_network(name=network_name)
         network = body['network']
         cls.networks.append(network)
+        return network
+
+    @classmethod
+    def create_shared_network(cls, network_name=None):
+        network_name = network_name or data_utils.rand_name('sharednetwork-')
+        post_body = {'name': network_name, 'shared': True}
+        body = cls.admin_client.create_network(**post_body)
+        network = body['network']
+        cls.shared_networks.append(network)
         return network
 
     @classmethod

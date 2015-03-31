@@ -14,12 +14,12 @@
 
 import abc
 
+from oslo_log import log as logging
 import six
 
 from neutron.tests.tempest import auth
 from neutron.tests.tempest import config
 from neutron.tests.tempest import exceptions
-from neutron.openstack.common import log as logging
 
 CONF = config.CONF
 LOG = logging.getLogger(__name__)
@@ -29,6 +29,13 @@ CREDENTIAL_TYPES = {
     'identity_admin': ('identity', 'admin'),
     'user': ('identity', None),
     'alt_user': ('identity', 'alt')
+}
+
+DEFAULT_PARAMS = {
+    'disable_ssl_certificate_validation':
+        CONF.identity.disable_ssl_certificate_validation,
+    'ca_certs': CONF.identity.ca_certificates_file,
+    'trace_requests': CONF.debug.trace_requests
 }
 
 
@@ -46,7 +53,7 @@ def get_configured_credentials(credential_type, fill_in=True,
     if identity_version == 'v3':
         conf_attributes.append('domain_name')
     # Read the parts of credentials from config
-    params = {}
+    params = DEFAULT_PARAMS.copy()
     section, prefix = CREDENTIAL_TYPES[credential_type]
     for attr in conf_attributes:
         _section = getattr(CONF, section)
@@ -69,6 +76,7 @@ def get_configured_credentials(credential_type, fill_in=True,
 # Wrapper around auth.get_credentials to use the configured identity version
 # is none is specified
 def get_credentials(fill_in=True, identity_version=None, **kwargs):
+    params = dict(DEFAULT_PARAMS, **kwargs)
     identity_version = identity_version or CONF.identity.auth_version
     # In case of "v3" add the domain from config if not specified
     if identity_version == 'v3':
@@ -82,7 +90,7 @@ def get_credentials(fill_in=True, identity_version=None, **kwargs):
     return auth.get_credentials(auth_url,
                                 fill_in=fill_in,
                                 identity_version=identity_version,
-                                **kwargs)
+                                **params)
 
 
 @six.add_metaclass(abc.ABCMeta)

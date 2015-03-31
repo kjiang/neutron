@@ -15,13 +15,13 @@
 import hashlib
 import os
 
+from oslo_concurrency import lockutils
+from oslo_log import log as logging
 import yaml
 
 from neutron.tests.tempest.common import cred_provider
 from neutron.tests.tempest import config
 from neutron.tests.tempest import exceptions
-from oslo_concurrency import lockutils
-from neutron.openstack.common import log as logging
 
 CONF = config.CONF
 LOG = logging.getLogger(__name__)
@@ -45,7 +45,14 @@ class Accounts(cred_provider.CredentialProvider):
             accounts = {}
             self.use_default_creds = True
         self.hash_dict = self.get_hash_dict(accounts)
-        self.accounts_dir = os.path.join(CONF.oslo_concurrency.lock_path, 'test_accounts')
+        # FIXME(dhellmann): The configuration option is not part of
+        # the API of the library, because if we change the option name
+        # or group it will break this use. Tempest needs to set this
+        # value somewhere that it owns, and then use
+        # lockutils.set_defaults() to tell oslo.concurrency what value
+        # to use.
+        self.accounts_dir = os.path.join(CONF.oslo_concurrency.lock_path,
+                                         'test_accounts')
         self.isolated_creds = {}
 
     @classmethod

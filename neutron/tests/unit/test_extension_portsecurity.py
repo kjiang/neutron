@@ -166,7 +166,7 @@ class PortSecurityTestPlugin(db_base_plugin_v2.NeutronDbPluginV2,
 
 
 class PortSecurityDBTestCase(PortSecurityTestCase):
-    def setUp(self, plugin=None):
+    def setUp(self, plugin=None, service_plugins=None):
         plugin = plugin or DB_PLUGIN_KLASS
         super(PortSecurityDBTestCase, self).setUp(plugin)
 
@@ -279,11 +279,24 @@ class TestPortSecurity(PortSecurityDBTestCase):
             'json', self._create_security_group(self.fmt, 'asdf', 'asdf'))
         security_group_id = security_group['security_group']['id']
         res = self._create_port('json', net['network']['id'],
-                                arg_list=('security_groups',),
+                                arg_list=('security_groups',
+                                    'port_security_enabled'),
+                                port_security_enabled=True,
                                 security_groups=[security_group_id])
         port = self.deserialize('json', res)
         self.assertEqual(port['port'][psec.PORTSECURITY], True)
         self.assertEqual(port['port']['security_groups'], [security_group_id])
+        self._delete('ports', port['port']['id'])
+
+    def test_create_port_without_security_group_and_net_sec_false(self):
+        res = self._create_network('json', 'net1', True,
+                                   arg_list=('port_security_enabled',),
+                                   port_security_enabled=False)
+        net = self.deserialize('json', res)
+        self._create_subnet('json', net['network']['id'], '10.0.0.0/24')
+        res = self._create_port('json', net['network']['id'])
+        port = self.deserialize('json', res)
+        self.assertFalse(port['port'][psec.PORTSECURITY])
         self._delete('ports', port['port']['id'])
 
     def test_update_port_security_off_with_security_group(self):

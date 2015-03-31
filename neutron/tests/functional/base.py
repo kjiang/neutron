@@ -18,6 +18,7 @@ import os
 from oslo_config import cfg
 
 from neutron.agent.common import config
+from neutron.agent.linux import utils
 from neutron.tests import base
 
 SUDO_CMD = 'sudo -n'
@@ -56,3 +57,14 @@ class BaseSudoTestCase(base.BaseTestCase):
         config.register_root_helper(cfg.CONF)
         self.config(group='AGENT',
                     root_helper=os.environ.get('OS_ROOTWRAP_CMD', SUDO_CMD))
+        self.config(group='AGENT',
+                    root_helper_daemon=os.environ.get(
+                        'OS_ROOTWRAP_DAEMON_CMD'))
+
+    def check_command(self, cmd, error_text, skip_msg, run_as_root=False):
+        try:
+            utils.execute(cmd, run_as_root=run_as_root)
+        except RuntimeError as e:
+            if error_text in str(e) and not self.fail_on_missing_deps:
+                self.skipTest(skip_msg)
+            raise
